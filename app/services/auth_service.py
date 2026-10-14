@@ -160,6 +160,12 @@ def login(email: str, password: str) -> UserSession:
     return result
 
 
+def require_login(user: UserSession | None) -> None:
+    """Call at the start of every service function that needs a logged-in user."""
+    if user is None:
+        raise PermissionDeniedError("Please log in first.")
+
+
 def require_admin(user: UserSession | None) -> None:
     """Call at the start of every admin-only service function."""
     if user is None or not user.is_admin:

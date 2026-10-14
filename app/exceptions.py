@@ -41,3 +41,29 @@ class EmailTakenError(ShopSenseError):
 class PermissionDeniedError(ShopSenseError):
     def __init__(self, message: str = "You do not have permission to do this.") -> None:
         super().__init__(message)
+
+
+class NotFoundError(ShopSenseError):
+    """A product, order or coupon doesn't exist (or isn't visible to this user)."""
+
+
+class OutOfStockError(ShopSenseError):
+    """Not enough stock for the requested quantity."""
+
+    def __init__(self, product_name: str, available: int) -> None:
+        self.product_name = product_name
+        self.available = available
+        if available == 0:
+            message = f"'{product_name}' is out of stock."
+        else:
+            message = f"Only {available} left of '{product_name}'."
+        super().__init__(message)
+
+
+class InvalidCouponError(ShopSenseError):
+    """Coupon code doesn't exist, is disabled, or has expired."""
+
+
+class EmptyCartError(ShopSenseError):
+    def __init__(self) -> None:
+        super().__init__("Your cart is empty.")

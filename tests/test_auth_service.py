@@ -13,7 +13,7 @@ from app.models import User
 from app.repositories import user_repository
 from app.services import auth_service
 from app.services.auth_service import (
-    LOCKOUT_DURATION, MAX_FAILED_LOGINS, login, register, require_admin,
+    LOCKOUT_DURATION, MAX_FAILED_LOGINS, login, register, require_admin, require_login,
 )
 from app.services.user_session import UserSession
 
@@ -262,3 +262,13 @@ def test_require_admin_allows_admin():
 def test_require_admin_rejects_others(user):
     with pytest.raises(PermissionDeniedError):
         require_admin(user)
+
+
+# ---------------------------------------------------------------------------
+# require_login
+# ---------------------------------------------------------------------------
+
+def test_require_login():
+    require_login(UserSession(2, "Customer", "c@example.com", "customer"))  # no error
+    with pytest.raises(PermissionDeniedError, match="log in"):
+        require_login(None)
