@@ -13,15 +13,24 @@ Rollback fixture — how tests avoid leaving data behind in the real (Neon) data
 Services run their real code unchanged; they don't know they are being tested.
 """
 
+import math
+import re
+import zlib
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import delete
 from sqlalchemy.orm import sessionmaker
 
 import app.db
+from app.ai import embeddings
 from app.db import engine
-from app.models import AuditLog, Category, Coupon, Inventory, Product, Review, User
+from app.models import (
+    AuditLog, Category, Coupon, Inventory, Order, OrderItem, Product, ProductEmbedding,
+    Review, User,
+)
+from app.models.catalog import EMBEDDING_DIM
 from app.services import auth_service
 from app.services.user_session import UserSession
 
@@ -71,11 +80,12 @@ class Factory:
         return self._save(Category(name=name or f"Test Category {self._next()}")).id
 
     def product(self, price="100.00", stock: int = 10, category_id: int | None = None,
-                name: str | None = None, active: bool = True) -> int:
+                name: str | None = None, active: bool = True,
+                description: str = "A product created by a test.") -> int:
         product = Product(
             category_id=category_id or self.category(),
             name=name or f"Test Product {self._next()}",
-            description="A product created by a test.", price=Decimal(price), is_active=active,
+            description=description, price=Decimal(price), is_active=active,
         )
         product.inventory = Inventory(stock=stock)
         return self._save(product).id
@@ -86,8 +96,18 @@ class Factory:
         self._save(Coupon(code=code, percent_off=percent_off, is_active=active,
                           valid_until=datetime.now(timezone.utc) + timedelta(days=days_valid)))
 
-    def review(self, user_id: int, product_id: int, rating: int) -> None:
-        self._save(Review(user_id=user_id, product_id=product_id, rating=rating))
+    def review(self, user_id: int, product_id: int, rating: int, comment: str | None = None,
+               score: float | None = None) -> int:
+        return self._save(Review(user_id=user_id, product_id=product_id, rating=rating,
+                                 comment=comment, sentiment_score=score)).id
+
+    def order(self, user_id: int, product_ids: list[int], status: str = "delivered") -> int:
+        """An order (price 1.00 per item) inserted directly, already in `status`."""
+        total = Decimal(len(product_ids))
+        order = Order(user_id=user_id, status=status, subtotal=total, discount=0, total=total)
+        order.items = [OrderItem(product_id=pid, qty=1, unit_price=Decimal("1.00"))
+                       for pid in product_ids]
+        return self._save(order).id
 
     def stock(self, product_id: int) -> int:
         return self.session.get(Inventory, product_id, populate_existing=True).stock
@@ -113,6 +133,41 @@ def admin(factory) -> UserSession:
 @pytest.fixture
 def customer(factory) -> UserSession:
     return factory.user()
+
+
+def fake_vector(text: str) -> list[float]:
+    """A tiny stand-in for the real embedding model: a "bag of words" vector.
+
+    Each word switches on one of the 384 dimensions (chosen by a hash of the word), and
+    the vector is scaled to length 1 like the real model's. So texts sharing more words
+    have a smaller cosine distance. It's crude, but deterministic and instant, which is
+    all the search/recommendation LOGIC tests need. Real meaning is tested separately in
+    test_ai_integration.py.
+    """
+    vector = [0.0] * EMBEDDING_DIM
+    for word in re.findall(r"[a-z0-9]+", text.lower()):
+        vector[zlib.crc32(word.encode()) % EMBEDDING_DIM] += 1.0
+    norm = math.sqrt(sum(x * x for x in vector)) or 1.0
+    return [x / norm for x in vector]
+
+
+@pytest.fixture
+def fake_embedder(monkeypatch):
+    """Replace the real model with fake_vector for the duration of a test.
+    get_model() returns a placeholder, so code that preloads the model still works
+    without loading the real one."""
+    monkeypatch.setattr(embeddings, "get_model", lambda: "fake-model")
+    monkeypatch.setattr(embeddings, "embed_texts",
+                        lambda texts, batch_size=32: [fake_vector(t) for t in texts])
+    return fake_vector
+
+
+@pytest.fixture
+def no_seed_embeddings(db_session):
+    """Delete every product embedding INSIDE the test transaction (rolled back after),
+    so search results only contain the test's own products."""
+    db_session.execute(delete(ProductEmbedding))
+    db_session.commit()
 
 
 @pytest.fixture(autouse=True)

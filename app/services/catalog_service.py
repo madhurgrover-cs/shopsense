@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import Row
 
+from app.ai import recommend, search
 from app.db import get_session
 from app.exceptions import NotFoundError, ValidationError
 from app.repositories import product_repository
@@ -39,6 +40,53 @@ def get_product_detail(product_id: int) -> ProductDetail:
         if row is None:
             raise NotFoundError("Product not found.")
         return _to_detail(row)
+
+
+# ---------------------------------------------------------------------------
+# Search and recommendations (AI module)
+# ---------------------------------------------------------------------------
+
+MAX_RESULTS = 50
+
+
+def search_products(query: str, limit: int = 20) -> list[ProductSummary]:
+    """Search active products by meaning (semantic), falling back to keywords.
+
+    Note for the GUI: the FIRST semantic search loads the embedding model (~30 s on the
+    dev laptop), so call this from a background thread with a "Searching..." message.
+    """
+    query = query.strip()
+    _validate_limit(limit)
+    if not query:
+        return []
+    with get_session() as session:
+        product_ids, _mode = search.search(session, query, limit)
+        return _summaries(session, product_ids)
+
+
+def frequently_bought_together(product_id: int, limit: int = 5) -> list[ProductSummary]:
+    """Products most often in the same (non-cancelled) order as this one."""
+    _validate_limit(limit)
+    with get_session() as session:
+        pairs = recommend.frequently_bought_together(session, product_id, limit)
+        return _summaries(session, [pid for pid, _times in pairs])
+
+
+def similar_products(product_id: int, limit: int = 5) -> list[ProductSummary]:
+    """Products whose description means something close to this one's."""
+    _validate_limit(limit)
+    with get_session() as session:
+        matches = recommend.similar_products(session, product_id, limit)
+        return _summaries(session, [pid for pid, _distance in matches])
+
+
+def _summaries(session, product_ids: list[int]) -> list[ProductSummary]:
+    return [_to_summary(r) for r in product_repository.get_product_rows(session, product_ids)]
+
+
+def _validate_limit(limit: int) -> None:
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_RESULTS:
+        raise ValidationError(f"Limit must be between 1 and {MAX_RESULTS}.")
 
 
 # ---------------------------------------------------------------------------

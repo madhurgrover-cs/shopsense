@@ -5,7 +5,7 @@ Run from the project root:   venv\\Scripts\\python -m scripts.seed
 What it creates (see CLAUDE.md "Seed data"):
   2 admins, 50 customers (+ addresses), 8 categories, 200 products (+ stock),
   5 coupons, 500 orders over the last 90 days (+ items, payments, status history),
-  300 reviews with VADER sentiment scores.
+  300 reviews (sentiment scores are filled afterwards by scripts.backfill_sentiment).
 
 Design notes:
 - Re-runnable: every table is TRUNCATEd first, and everything runs in ONE transaction,
@@ -30,7 +30,6 @@ import bcrypt
 from faker import Faker
 from sqlalchemy import insert, text
 from sqlalchemy.orm import Session
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 from app.db import get_session
 from app.models import (
@@ -421,7 +420,6 @@ def advance_statuses(session: Session, plans: list[dict]) -> None:
 
 def seed_reviews(session: Session, plans: list[dict], products: list[dict]) -> None:
     """300 reviews, only by customers who actually received the product."""
-    analyzer = SentimentIntensityAnalyzer()
     by_id = {p["id"]: p for p in products}
 
     # A few "problem" products get mostly bad reviews, so the Negative badge and the
@@ -456,9 +454,9 @@ def seed_reviews(session: Session, plans: list[dict], products: list[dict]) -> N
         rows.append({
             "user_id": user_id, "product_id": product_id, "rating": rating,
             "comment": comment,
-            # VADER compound score in [-1, 1]. The app's sentiment module will compute it
-            # the same way for new reviews.
-            "sentiment_score": round(analyzer.polarity_scores(comment)["compound"], 4),
+            # Left empty on purpose: scripts.backfill_sentiment scores every review with
+            # app.ai.sentiment, the same function that scores new reviews in the app.
+            "sentiment_score": None,
             "created_at": reviewed_at,
         })
     bulk_insert(session, Review, rows)

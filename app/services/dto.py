@@ -122,3 +122,25 @@ class OrderDetail:
     coupon_code: str | None
     payment: PaymentInfo | None
     timeline: list[StatusChange]  # oldest first, written by the trg_order_status trigger
+
+
+@dataclass(frozen=True)
+class ReviewInfo:
+    id: int
+    product_id: int
+    product_name: str
+    user_id: int
+    user_name: str
+    rating: int
+    comment: str | None
+    sentiment_score: float | None  # VADER compound score, -1..1; None if no comment
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class ProductSentiment:
+    product_id: int
+    review_count: int
+    avg_rating: float | None
+    avg_score: float | None
+    badge: str | None  # "Positive" / "Mixed" / "Negative"; None without scored reviews

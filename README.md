@@ -44,3 +44,14 @@ Requires **Python 3.11+** (developed on 3.14).
    python -m scripts.check_db         # lists tables, views, trigger, pgvector version
    alembic check                      # should print "No new upgrade operations detected."
    ```
+
+6. **Load demo data and build the search embeddings:**
+
+   ```powershell
+   python -m scripts.seed                # re-runnable; wipes and refills every table
+   python -m scripts.build_embeddings    # needed after every seed (the seed clears embeddings)
+   python -m scripts.backfill_sentiment  # scores the seeded reviews with VADER
+   ```
+
+   The first `build_embeddings` run downloads the MiniLM model (~90 MB). Later runs
+   only embed products that are new or whose name/description changed.
