@@ -1,0 +1,22 @@
+# --- Database ---
+SQLAlchemy>=2.0.30,<2.1
+alembic>=1.13
+psycopg[binary]>=3.2      # PostgreSQL driver (psycopg 3)
+pgvector>=0.3             # SQLAlchemy Vector type for pgvector
+
+# --- Config / security ---
+python-dotenv>=1.0
+bcrypt>=4.1
+
+# --- GUI / charts / reports ---
+customtkinter>=5.2
+matplotlib>=3.8
+reportlab>=4.1            # PDF export
+
+# --- AI (CPU only) ---
+sentence-transformers>=3.0
+vaderSentiment>=3.3
+
+# --- Dev ---
+Faker>=25.0
+pytest>=8.0
