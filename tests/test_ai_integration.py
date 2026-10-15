@@ -43,12 +43,47 @@ def test_real_model_search_and_similar_products(factory, db_session, no_seed_emb
                     "gaming and esports.")
     assert build_missing_embeddings(product_ids=[scarf, grinder, headset, keyboard]) == 4
 
-    # 3. Queries sharing NO words with the product they should find.
+    # 3. Queries sharing NO words with the product they should find. Only our four
+    #    products are compared: seed products have no embedding here, but hybrid search
+    #    still finds them by keyword (e.g. a seed "Winter ... Hoodie" for "winter").
+    ours = {scarf, grinder, headset, keyboard}
+
     def top(query):
-        return catalog_service.search_products(query, limit=4)[0].id
+        results = catalog_service.search_products(query, limit=20)
+        return next(p.id for p in results if p.id in ours)
     assert top("warm winter wear") == scarf
     assert top("something for my morning coffee") == grinder
     assert top("gift for a gamer") in {headset, keyboard}
 
     # 4. Similar products: the other gaming accessory is closest to the headset.
     assert catalog_service.similar_products(headset, limit=1)[0].id == keyboard
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("typed, meant", [
+    ("sirt", "shirt"), ("shrt", "shirt"), ("hodie", "hoodie"),
+    ("laptp", "laptop"), ("keybord", "keyboard"),
+])
+def test_real_catalog_typo_search(db_session, typed, meant):
+    """On the seeded catalog (read-only): the typo is corrected, and the first results
+    are the products whose NAME contains the word (hybrid ranking)."""
+    result = catalog_service.search(typed, limit=10)
+    assert result.corrected_query == meant
+    assert meant in result.products[0].name.lower()
+    assert all(meant in p.name.lower() for p in result.products[:4])
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("query", ["warm winter wear", "gift for a gamer",
+                                   "protect my phone screen", "running shoes"])
+def test_real_catalog_normal_queries_are_not_corrected(db_session, query):
+    result = catalog_service.search(query, limit=5)
+    assert result.corrected_query is None and result.products
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("query", ["asdfgh qwerty", "xkcdqz", "blorptang wuzzle",
+                                   "jjjjj kkkk"])
+def test_real_catalog_gibberish_returns_nothing(db_session, query):
+    result = catalog_service.search(query, limit=10)
+    assert result.products == [] and result.corrected_query is None

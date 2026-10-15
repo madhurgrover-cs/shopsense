@@ -42,6 +42,13 @@ class ProductDetail(ProductSummary):
 
 
 @dataclass(frozen=True)
+class SearchResults:
+    query: str                    # what the user typed
+    products: list[ProductSummary]  # best match first
+    corrected_query: str | None = None  # what was searched instead, if spelling was fixed
+
+
+@dataclass(frozen=True)
 class CouponInfo:
     code: str
     percent_off: int

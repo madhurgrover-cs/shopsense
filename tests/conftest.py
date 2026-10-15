@@ -18,13 +18,14 @@ import re
 import zlib
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import delete
 from sqlalchemy.orm import sessionmaker
 
 import app.db
-from app.ai import embeddings
+from app.ai import embeddings, search
 from app.db import engine
 from app.models import (
     AuditLog, Category, Coupon, Inventory, Order, OrderItem, Product, ProductEmbedding,
@@ -183,7 +184,14 @@ def gui_app():
     from app.gui import app as app_module  # imported here: only GUI tests need Tk
 
     patch = pytest.MonkeyPatch()
-    patch.setattr(app_module.system_service, "check_connection", lambda: None)
+    # The window gets its OWN stand-in for system_service. (Patching functions on the
+    # real module would last for the whole session and leak into non-GUI tests.)
+    # No database check, and customer logins never load the real AI model.
+    patch.setattr(app_module, "system_service", SimpleNamespace(
+        check_connection=lambda: None,
+        preload_search_model=lambda: True,
+        is_search_model_loaded=embeddings.is_model_loaded,
+    ))
     popups: list[str] = []
     patch.setattr(app_module, "show_error", lambda parent, title, message: popups.append(title))
     patch.setattr(app_module, "MessageDialog",
@@ -194,6 +202,16 @@ def gui_app():
     yield window
     window._on_close()
     patch.undo()
+
+
+@pytest.fixture(autouse=True)
+def fresh_spelling_vocabulary():
+    """The spelling vocabulary is cached for 5 minutes. Clear it around every test, so
+    a test's own products (inside its rollback transaction) are in the vocabulary and
+    don't leak into the next test."""
+    search.clear_vocabulary_cache()
+    yield
+    search.clear_vocabulary_cache()
 
 
 @pytest.fixture(autouse=True)

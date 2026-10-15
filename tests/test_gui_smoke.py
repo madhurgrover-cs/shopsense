@@ -6,10 +6,13 @@ import time
 from datetime import datetime, timezone
 from decimal import Decimal
 
+import threading
+
 import customtkinter as ctk
 import pytest
 
 from app.exceptions import InvalidCredentialsError, OutOfStockError
+from app.gui import app as app_module
 from app.gui.screens import cart as cart_screen
 from app.gui.screens import login as login_screen
 from app.gui.screens import orders as orders_screen
@@ -17,7 +20,7 @@ from app.gui.screens import product as product_screen
 from app.gui.screens import shop as shop_screen
 from app.services.dto import (
     CartLine, CartView, CategoryInfo, OrderDetail, OrderLine, OrderSummary, PaymentInfo,
-    ProductDetail, ProductSentiment, ProductSummary, ReviewInfo, StatusChange,
+    ProductDetail, ProductSentiment, ProductSummary, ReviewInfo, SearchResults, StatusChange,
 )
 from app.services.user_session import UserSession
 
@@ -66,7 +69,8 @@ def fake_services(monkeypatch):
     s(shop_screen.catalog_service, "browse_products",
       lambda category_id=None: [p for p in (HOODIE, SOCKS)
                                 if category_id in (None, p.category_id)])
-    s(shop_screen.catalog_service, "search_products", lambda query, limit: [SOCKS])
+    s(shop_screen.catalog_service, "search",
+      lambda query, limit, correct_spelling=True: SearchResults(query, [SOCKS]))
     s(shop_screen.system_service, "is_search_model_loaded", lambda: True)
     detail = ProductDetail(**{**HOODIE.__dict__, "description": "Warm fleece."})
     s(product_screen.catalog_service, "get_product_detail", lambda pid: detail)
@@ -148,6 +152,34 @@ def test_category_filter_and_search(window, fake_services):
     assert "1 results for \"warm socks\"" in shop._summary.cget("text")
 
 
+def test_search_shows_spelling_correction_and_original_link(window, fake_services,
+                                                          monkeypatch):
+    calls = []
+
+    def fake_search(query, limit, correct_spelling=True):
+        calls.append((query, correct_spelling))
+        if correct_spelling:
+            return SearchResults(query, [HOODIE], corrected_query="hoodie")
+        return SearchResults(query, [])
+    monkeypatch.setattr(shop_screen.catalog_service, "search", fake_search)
+    shop = window._screens["shop"]
+
+    shop._search.delete(0, "end")
+    shop._search.insert(0, "hodie")
+    shop._run_search()
+    pump(window)
+    assert shop._correction.winfo_manager() == "pack"  # the line is shown
+    assert shop._corrected_label.cget("text") == "hoodie"
+    assert shop._original_link.cget("text") == "Search instead for hodie"
+    assert "1 results for \"hoodie\"" in shop._summary.cget("text")
+
+    shop._original_link.invoke()  # "Search instead for hodie"
+    pump(window)
+    assert calls == [("hodie", True), ("hodie", False)]
+    assert shop._correction.winfo_manager() == ""  # hidden: nothing was corrected
+    assert "0 results for \"hodie\"" in shop._summary.cget("text")
+
+
 def test_product_page_shows_details_reviews_and_recommendations(window, fake_services):
     window._screens["shop"]._open(HOODIE.id)
     pump(window)
@@ -226,6 +258,29 @@ def test_orders_show_timeline_and_review_button(window, fake_services):
         assert expected in on_screen, expected
 
 
+def test_customer_login_preloads_ai_model_and_shows_ready(window, fake_services,
+                                                         monkeypatch):
+    window.logout()
+    monkeypatch.setattr(app_module.system_service, "is_search_model_loaded", lambda: False)
+    release = threading.Event()
+    monkeypatch.setattr(app_module.system_service, "preload_search_model",
+                        lambda: release.wait(5))  # a "load" we finish ourselves
+    login_as(window, CUSTOMER, monkeypatch)
+    assert window._ai_status.cget("text") == "Loading AI search..."
+    release.set()
+    pump(window, until=lambda: window._ai_status.cget("text") == "● AI search ready")
+    assert window._current == "shop"
+
+
+def test_ai_model_preload_failure_is_shown(window, fake_services, monkeypatch):
+    window.logout()
+    assert window._ai_status.cget("text") == ""  # hidden while logged out
+    monkeypatch.setattr(app_module.system_service, "is_search_model_loaded", lambda: False)
+    monkeypatch.setattr(app_module.system_service, "preload_search_model", lambda: False)
+    login_as(window, CUSTOMER, monkeypatch)
+    pump(window, until=lambda: "unavailable" in window._ai_status.cget("text"))
+
+
 def test_logout_returns_to_login_and_clears_screens(window):
     window.cart_coupon = "WELCOME10"
     window.logout()
@@ -235,7 +290,11 @@ def test_logout_returns_to_login_and_clears_screens(window):
 
 
 def test_admin_login_opens_admin_placeholder(window, monkeypatch):
+    preloads = []
+    monkeypatch.setattr(app_module.system_service, "preload_search_model",
+                        lambda: preloads.append(1))
     login_as(window, ADMIN, monkeypatch)
     assert window._current == "admin" and set(window._screens) == {"admin"}
+    assert preloads == [] and window._ai_status.cget("text") == ""  # admins don't search
     assert "Welcome, Admin One" in texts(window._screens["admin"])
     window.logout()

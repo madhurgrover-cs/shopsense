@@ -2,7 +2,7 @@
 current screen on the right.
 
     +-----------+------------------------------------------------+
-    | ShopSense | Title                          Loading... ~~~   |
+    | ShopSense | Title         AI search ready  Loading... ~~~   |
     |           +------------------------------------------------+
     |  Shop     |                                                |
     |  Cart     |              current screen                    |
@@ -17,6 +17,7 @@ user's session (cart, orders, typed text) can leak into the next one.
 """
 
 import logging
+import threading
 
 import customtkinter as ctk
 
@@ -49,6 +50,14 @@ CUSTOMER_SCREENS = [("shop", "Shop", ShopScreen), ("cart", "Cart", CartScreen),
 CUSTOMER_HIDDEN_SCREENS = [("product", ProductScreen)]
 ADMIN_SCREENS = [("admin", "Admin", AdminHomeScreen)]
 
+AI_POLL_MS = 500  # how often the main thread checks whether the AI model has loaded
+# AI model state -> (top bar text, colour key)
+AI_STATUS = {
+    "loading": ("Loading AI search...", "text_muted"),
+    "ready": ("● AI search ready", "success"),
+    "failed": ("AI search unavailable, using keywords", "warning"),
+}
+
 
 class ShopSenseApp(ctk.CTk):
     def __init__(self) -> None:
@@ -62,6 +71,9 @@ class ShopSenseApp(ctk.CTk):
         self.cart_coupon: str | None = None  # code applied in the cart (not stored in the DB)
         self.tasks = TaskRunner(self, on_busy_change=self._on_busy_change,
                                 on_error=self.show_error)
+        self._ai_loader: threading.Thread | None = None
+        self._ai_loaded_ok = False
+        self._ai_poll: str | None = None  # id of the scheduled after() check
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -110,6 +122,9 @@ class ShopSenseApp(ctk.CTk):
         self._title = ctk.CTkLabel(bar, text="", font=theme.title_font(),
                                    text_color=COLORS["text"])
         self._title.grid(row=0, column=0, sticky="w")
+        self._ai_status = ctk.CTkLabel(bar, text="", font=theme.small_font(),
+                                       text_color=COLORS["text_muted"])
+        self._ai_status.grid(row=0, column=1, sticky="e", padx=PAD_M)
         self.status = StatusIndicator(bar)
         self.status.grid(row=0, column=2, sticky="e")
 
@@ -166,12 +181,59 @@ class ShopSenseApp(ctk.CTk):
             start = "shop"
         self._set_footer()
         self.navigate(start)
+        if not user.is_admin:
+            self._preload_search_model()
 
     def logout(self) -> None:
         email = self.user.email if self.user else ""
         self.user = None
         self.cart_coupon = None
+        self._stop_ai_poll()
+        self._set_ai_status(None)
         self._show_guest(email)
+
+    # ------------------------------------------------------------------ AI model
+
+    def _preload_search_model(self) -> None:
+        """Start loading the AI search model in the background right after a customer
+        logs in, so their first search is fast instead of waiting ~30 s.
+
+        It uses its own thread rather than self.tasks: the load takes ~30 s and would
+        otherwise block one of the two task workers (and the loading indicator) the
+        whole time. If the user searches before it finishes, the search simply waits
+        for the same load (embeddings.get_model uses a lock); it never loads twice.
+        """
+        self._stop_ai_poll()
+        if system_service.is_search_model_loaded():
+            self._set_ai_status("ready")
+            return
+        if self._ai_loader is None or not self._ai_loader.is_alive():
+            self._ai_loader = threading.Thread(target=self._load_model, daemon=True,
+                                               name="shopsense-ai-preload")
+            self._ai_loader.start()
+        self._set_ai_status("loading")
+        self._ai_poll = self.after(AI_POLL_MS, self._check_model_loaded)
+
+    def _load_model(self) -> None:
+        # Runs in the preload thread: no Tkinter calls allowed here.
+        self._ai_loaded_ok = system_service.preload_search_model()
+
+    def _check_model_loaded(self) -> None:
+        """Main thread, every AI_POLL_MS until the preload thread has finished."""
+        if self._ai_loader.is_alive():
+            self._ai_poll = self.after(AI_POLL_MS, self._check_model_loaded)
+            return
+        self._ai_poll = None
+        self._set_ai_status("ready" if self._ai_loaded_ok else "failed")
+
+    def _stop_ai_poll(self) -> None:
+        if self._ai_poll is not None:
+            self.after_cancel(self._ai_poll)
+            self._ai_poll = None
+
+    def _set_ai_status(self, state: str | None) -> None:
+        text, color = AI_STATUS.get(state, ("", "text_muted"))
+        self._ai_status.configure(text=text, text_color=COLORS[color])
 
     def _set_footer(self) -> None:
         footer = self.sidebar.footer

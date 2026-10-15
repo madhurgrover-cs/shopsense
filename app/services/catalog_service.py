@@ -4,13 +4,14 @@ from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import Row
 
-from app.ai import recommend, search, sentiment
+from app.ai import recommend, sentiment
+from app.ai import search as ai_search  # aliased: this module defines its own search()
 from app.db import get_session
 from app.exceptions import NotFoundError, ValidationError
 from app.repositories import product_repository
 from app.services import audit_service
 from app.services.auth_service import require_admin
-from app.services.dto import CategoryInfo, ProductDetail, ProductSummary
+from app.services.dto import CategoryInfo, ProductDetail, ProductSummary, SearchResults
 from app.services.user_session import UserSession
 
 MAX_NAME_LENGTH = 200
@@ -49,19 +50,28 @@ def get_product_detail(product_id: int) -> ProductDetail:
 MAX_RESULTS = 50
 
 
-def search_products(query: str, limit: int = 20) -> list[ProductSummary]:
-    """Search active products by meaning (semantic), falling back to keywords.
+def search(query: str, limit: int = 20, correct_spelling: bool = True) -> SearchResults:
+    """Search active products: spelling correction, then semantic + keyword ranking
+    (keyword only if the AI model or embeddings are unavailable).
 
-    Note for the GUI: the FIRST semantic search loads the embedding model (~30 s on the
-    dev laptop), so call this from a background thread with a "Searching..." message.
+    correct_spelling=False searches exactly the typed words (the GUI's "search instead
+    for ..." link). If a typo was fixed, results.corrected_query says what was searched.
+
+    Note for the GUI: if the embedding model isn't loaded yet, this loads it (~30 s on
+    the dev laptop), so call it from a background thread.
     """
     query = query.strip()
     _validate_limit(limit)
     if not query:
-        return []
+        return SearchResults(query, [])
     with get_session() as session:
-        product_ids, _mode = search.search(session, query, limit)
-        return _summaries(session, product_ids)
+        result = ai_search.search(session, query, limit, correct_spelling=correct_spelling)
+        return SearchResults(query, _summaries(session, result.ids), result.corrected_query)
+
+
+def search_products(query: str, limit: int = 20) -> list[ProductSummary]:
+    """Just the products of search() (with spelling correction)."""
+    return search(query, limit).products
 
 
 def frequently_bought_together(product_id: int, limit: int = 5) -> list[ProductSummary]:
@@ -117,6 +127,7 @@ def create_product(admin: UserSession, category_id: int, name: str, description:
             session, admin, audit_service.CREATE, audit_service.PRODUCT, product.id,
             details=f"name={name!r}, price={price}, stock={stock}",
         )
+        ai_search.clear_vocabulary_cache()  # so the new name's words can be spell-corrected to
         return _to_detail(product_repository.get_product_row(session, product.id))
 
 
@@ -156,6 +167,7 @@ def update_product(admin: UserSession, product_id: int, *, name: str | None = No
             # vector describes the old text, so delete it and let it be rebuilt.
             if "name" in changes or "description" in changes:
                 product_repository.delete_embedding(session, product.id)
+                ai_search.clear_vocabulary_cache()  # spelling vocabulary uses these words
             audit_service.record_admin_action(
                 session, admin, audit_service.UPDATE, audit_service.PRODUCT, product.id,
                 details=details,
@@ -178,6 +190,7 @@ def delete_product(admin: UserSession, product_id: int) -> None:
                 session, admin, audit_service.DELETE, audit_service.PRODUCT, product.id,
                 details=f"soft-deleted {product.name!r}",
             )
+            ai_search.clear_vocabulary_cache()
 
 
 def update_stock(admin: UserSession, product_id: int, new_stock: int) -> int:

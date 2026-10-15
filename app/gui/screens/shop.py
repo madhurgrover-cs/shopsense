@@ -1,4 +1,4 @@
-"""Shop: category filter, semantic search, and a grid of product cards.
+"""Shop: category filter, search (with spelling correction), and a grid of product cards.
 
 Cards are shown 24 per page. CustomTkinter widgets are drawn on canvases and are
 fairly heavy; building all ~200 cards at once would make the screen slow to appear
@@ -10,7 +10,7 @@ import customtkinter as ctk
 from app.gui import theme
 from app.gui.screens.base import Screen
 from app.gui.theme import COLORS, CORNER_RADIUS, PAD_L, PAD_M, PAD_S, PAD_XL
-from app.gui.widgets.common import clear, empty_state, form_entry, muted
+from app.gui.widgets.common import clear, empty_state, form_entry, label, link_button, muted
 from app.gui.widgets.product_card import ProductCard
 from app.services import catalog_service, system_service
 
@@ -54,6 +54,15 @@ class ShopScreen(Screen):
             dropdown_fg_color=COLORS["surface"], dropdown_text_color=COLORS["text"],
             dropdown_font=theme.body_font())
         self._category.pack(side="right")
+
+        # "Showing results for shirt  ·  Search instead for sirt" (only after a correction).
+        self._correction = ctk.CTkFrame(self, fg_color="transparent")
+        label(self._correction, "Showing results for", size=14).pack(side="left")
+        self._corrected_label = label(self._correction, "", size=14, weight="bold")
+        self._corrected_label.pack(side="left", padx=(5, 0))
+        self._original_link = link_button(self._correction, "", self._search_original)
+        self._original_link.pack(side="left", padx=(PAD_S, 0))
+        self._original_query = ""
 
         self._summary = muted(self, "")
         self._summary.pack(fill="x", padx=PAD_XL)
@@ -99,7 +108,7 @@ class ShopScreen(Screen):
         category_id = self._categories.get(self._category.get())
         self._start(catalog_service.browse_products, category_id, message="Loading products...")
 
-    def _run_search(self) -> None:
+    def _run_search(self, correct_spelling: bool = True) -> None:
         query = self._search.get().strip()
         if not query:
             return
@@ -108,7 +117,14 @@ class ShopScreen(Screen):
         self._clear_button.pack(side="left")
         message = ("Searching..." if system_service.is_search_model_loaded()
                    else FIRST_SEARCH_MESSAGE)
-        self._start(catalog_service.search_products, query, SEARCH_LIMIT, message=message)
+        self._start(catalog_service.search, query, SEARCH_LIMIT, correct_spelling,
+                    message=message)
+
+    def _search_original(self) -> None:
+        """The "Search instead for <typed words>" link: search without correcting."""
+        self._search.delete(0, "end")
+        self._search.insert(0, self._original_query)
+        self._run_search(correct_spelling=False)
 
     def _clear_search(self) -> None:
         self._category.set(ALL_CATEGORIES)
@@ -118,21 +134,36 @@ class ShopScreen(Screen):
         self._request += 1
         request = self._request
         self._summary.configure(text="")
+        self._show_correction(None)
         self.app.tasks.run(func, *args, message=message,
                            on_success=lambda products: self._loaded_products(request, products))
 
-    def _loaded_products(self, request: int, products) -> None:
+    def _loaded_products(self, request: int, result) -> None:
         if request != self._request:
             return  # the user started another search / filter meanwhile
-        self._products = products
-        if self._search_query:
-            text = f"{len(products)} results for \"{self._search_query}\", best match first"
-        else:
+        if self._search_query:  # catalog_service.search returns SearchResults
+            products = result.products
+            self._show_correction(result)
+            searched = result.corrected_query or result.query
+            text = f"{len(products)} results for \"{searched}\", best match first"
+        else:                   # browse_products returns a plain list
+            products = result
             text = f"{len(products)} products"
+        self._products = products
         self._summary.configure(text=text)
         self._show_page(0)
 
     # ------------------------------------------------------------------ display
+
+    def _show_correction(self, result) -> None:
+        """Show the "Showing results for ..." line if the search fixed a typo."""
+        if result is None or not result.corrected_query:
+            self._correction.pack_forget()
+            return
+        self._original_query = result.query
+        self._corrected_label.configure(text=result.corrected_query)
+        self._original_link.configure(text=f"Search instead for {result.query}")
+        self._correction.pack(fill="x", padx=PAD_XL, before=self._summary)
 
     def _show_page(self, page: int) -> None:
         pages = max(1, -(-len(self._products) // PAGE_SIZE))  # ceiling division

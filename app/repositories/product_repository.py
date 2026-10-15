@@ -171,6 +171,19 @@ def nearest_by_vector(session: Session, vector: Sequence[float], limit: int,
     return [(row.product_id, float(row.distance)) for row in session.execute(stmt)]
 
 
+def distances_for(session: Session, vector: Sequence[float],
+                  product_ids: Sequence[int]) -> dict[int, float]:
+    """{product id: cosine distance to `vector`} for these products (those with an
+    embedding). Hybrid search uses it for keyword matches the nearest-neighbour query
+    didn't return, so every candidate has a semantic score."""
+    if not product_ids:
+        return {}
+    distance = ProductEmbedding.embedding.cosine_distance(vector)
+    stmt = select(ProductEmbedding.product_id, distance.label("distance")).where(
+        ProductEmbedding.product_id.in_(product_ids))
+    return {row.product_id: float(row.distance) for row in session.execute(stmt)}
+
+
 # ---------------------------------------------------------------------------
 # Keyword search and co-purchase
 # ---------------------------------------------------------------------------
@@ -180,26 +193,52 @@ def _escape_like(word: str) -> str:
     return word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _contains_any(words: Sequence[str]):
+    """(name conditions, description conditions): one ILIKE '%word%' per word."""
+    patterns = [f"%{_escape_like(word)}%" for word in words]
+    return ([Product.name.ilike(p, escape="\\") for p in patterns],
+            [Product.description.ilike(p, escape="\\") for p in patterns])
+
+
 def keyword_search(session: Session, words: Sequence[str], limit: int) -> list[int]:
     """Ids of active products whose name or description contains any of the words.
 
     Ranking: each word found in the NAME scores 2, in the DESCRIPTION scores 1;
     higher total first, then alphabetical.
     """
-    conditions, score = [], 0
-    for word in words:
-        pattern = f"%{_escape_like(word)}%"
-        in_name = Product.name.ilike(pattern, escape="\\")
-        in_description = Product.description.ilike(pattern, escape="\\")
-        conditions += [in_name, in_description]
-        score = score + case((in_name, 2), else_=0) + case((in_description, 1), else_=0)
+    in_name, in_description = _contains_any(words)
+    score = sum((case((n, 2), else_=0) + case((d, 1), else_=0)
+                 for n, d in zip(in_name, in_description)), start=0)
     stmt = (
         select(Product.id)
-        .where(Product.is_active, or_(*conditions))
+        .where(Product.is_active, or_(*in_name, *in_description))
         .order_by(score.desc(), Product.name)
         .limit(limit)
     )
     return list(session.scalars(stmt))
+
+
+def keyword_matches(session: Session, words: Sequence[str], limit: int) -> list[Row]:
+    """Rows (id, name, description) of active products containing any of the words.
+    Hybrid search scores these in Python, so it needs the text, not just the ids."""
+    in_name, in_description = _contains_any(words)
+    stmt = (
+        select(Product.id, Product.name, Product.description)
+        .where(Product.is_active, or_(*in_name, *in_description))
+        .order_by(Product.id)
+        .limit(limit)
+    )
+    return list(session.execute(stmt))
+
+
+def vocabulary_texts(session: Session) -> tuple[list[str], list[str]]:
+    """(active product names + category names, active product descriptions): the text
+    the spelling corrector learns its words from."""
+    rows = session.execute(
+        select(Product.name, Product.description).where(Product.is_active)
+    ).all()
+    categories = list(session.scalars(select(Category.name)))
+    return [r.name for r in rows] + categories, [r.description for r in rows]
 
 
 def co_purchased_with(session: Session, product_id: int, limit: int,

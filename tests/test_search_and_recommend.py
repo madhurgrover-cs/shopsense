@@ -1,4 +1,5 @@
-"""Unit tests for semantic search, keyword fallback and recommendations.
+"""Unit tests for search (spelling correction, hybrid ranking, keyword fallback) and
+recommendations.
 
 They use the fake embedder (bag-of-words vectors, see conftest) and delete the seed
 embeddings inside the rollback transaction, so only the test's own products compete.
@@ -12,7 +13,7 @@ from app.exceptions import ValidationError
 from app.models import Product
 from app.repositories import product_repository
 from app.services import catalog_service
-from app.services.dto import ProductSummary
+from app.services.dto import ProductSummary, SearchResults
 from scripts.build_embeddings import build_missing_embeddings
 
 
@@ -44,25 +45,25 @@ def test_keywords_drops_stopwords_short_words_and_duplicates():
 # ---------------------------------------------------------------------------
 
 def test_semantic_search_ranks_by_similarity(db_session, catalog):
-    ids, mode = search.search(db_session, "zorblax wool scarf", limit=10)
-    assert mode == "semantic"
+    ids, mode, _corrected = search.search(db_session, "zorblax wool scarf", limit=10)
+    assert mode == "hybrid"
     assert ids[0] == catalog["scarf"]          # shares 3 words
     assert ids[1] == catalog["gloves"]         # shares 2 words
     assert catalog["mouse"] not in ids         # shares none: beyond MAX_DISTANCE
 
 
 def test_semantic_search_drops_unrelated_results(db_session, catalog):
-    assert search.search(db_session, "xylophone", limit=10) == ([], "semantic")
+    assert search.search(db_session, "xylophone", limit=10) == ([], "hybrid", None)
 
 
 def test_semantic_search_excludes_inactive_products(db_session, catalog, admin):
     catalog_service.delete_product(admin, catalog["scarf"])
-    ids, _ = search.search(db_session, "zorblax wool scarf", limit=10)
+    ids = search.search(db_session, "zorblax wool scarf", limit=10).ids
     assert catalog["scarf"] not in ids and catalog["gloves"] in ids
 
 
 def test_semantic_search_respects_limit(db_session, catalog):
-    ids, _ = search.search(db_session, "zorblax quindle wool coffee gaming", limit=2)
+    ids = search.search(db_session, "zorblax quindle wool coffee gaming", limit=2).ids
     assert len(ids) == 2
 
 
@@ -77,7 +78,7 @@ def test_falls_back_to_keywords_when_no_embeddings_exist(factory, db_session,
     monkeypatch.setattr(embeddings, "embed_texts", must_not_embed)
     pid = factory.product(name="Zorblax Thermal Flask")
 
-    assert search.search(db_session, "thermal zorblax", limit=5) == ([pid], "keyword")
+    assert search.search(db_session, "thermal zorblax", limit=5) == ([pid], "keyword", None)
 
 
 def test_falls_back_to_keywords_when_model_fails(db_session, catalog, monkeypatch):
@@ -85,7 +86,7 @@ def test_falls_back_to_keywords_when_model_fails(db_session, catalog, monkeypatc
         raise OSError("could not download model")
     monkeypatch.setattr(embeddings, "embed_texts", broken_model)
 
-    ids, mode = search.search(db_session, "gaming quindle", limit=5)
+    ids, mode, _corrected = search.search(db_session, "gaming quindle", limit=5)
     assert mode == "keyword"
     assert ids[0] == catalog["mouse"]  # matches both words in its name
 
@@ -112,6 +113,84 @@ def test_keyword_search_with_only_stopwords(db_session):
 
 
 # ---------------------------------------------------------------------------
+# Spelling correction and hybrid ranking
+# ---------------------------------------------------------------------------
+
+def test_typo_is_corrected_before_searching(db_session, catalog):
+    result = search.search(db_session, "zorblx scarf", limit=10)
+    assert result.corrected_query == "zorblax scarf"
+    assert result.ids[0] == catalog["scarf"]
+
+
+def test_typo_also_corrected_in_keyword_fallback(db_session, catalog, monkeypatch):
+    def broken_model(*args, **kwargs):
+        raise OSError("could not download model")
+    monkeypatch.setattr(embeddings, "embed_texts", broken_model)
+    result = search.search(db_session, "quindl grinder", limit=5)
+    assert result.mode == "keyword" and result.corrected_query == "quindle grinder"
+    assert result.ids[0] == catalog["grinder"]  # both words in its name (seed grinders: one)
+
+
+def test_spelling_correction_can_be_switched_off(db_session, catalog):
+    result = search.search(db_session, "zorblx scarf", limit=10, correct_spelling=False)
+    assert result.corrected_query is None
+
+
+def test_name_match_ranks_above_closer_meaning(factory, db_session, fake_embedder,
+                                               no_seed_embeddings):
+    """`closer` is closer by meaning (its short text is mostly the query word), but only
+    `in_name` has the word in its NAME, so hybrid ranking puts it first."""
+    cat = factory.category()
+    in_name = factory.product(category_id=cat, name="Plorbix Lamp",
+                              description="Bright reading lamp for a study table.")
+    closer = factory.product(category_id=cat, name="Desk Light", description="Plorbix.")
+    build_missing_embeddings(product_ids=[in_name, closer])
+    distances = product_repository.distances_for(
+        db_session, fake_embedder("plorbix"), [in_name, closer])
+    assert distances[closer] < distances[in_name]  # semantic alone would pick `closer`
+
+    assert search.search(db_session, "plorbix", limit=5).ids == [in_name, closer]
+
+
+def test_keyword_match_without_embedding_is_still_found(factory, db_session, catalog):
+    """A product added after build_embeddings ran (no vector yet) is found by keyword."""
+    new = factory.product(name="Zorblax Quorvel")
+    assert search.search(db_session, "quorvel", limit=10).ids == [new]
+
+
+def test_keyword_score():
+    assert search.keyword_score(["shirt"], "Polo T-Shirt", "") == 1.0
+    assert search.keyword_score(["shirt"], "Kurta", "Wear it like a shirt.") == 0.3
+    assert search.keyword_score(["shirt", "blue"], "Polo T-Shirt", "") == 0.5
+    assert search.keyword_score(["men"], "Women's Saree", "For women.") == 0.0  # word start
+    assert search.keyword_score([], "Anything", "") == 0.0
+
+
+def test_gibberish_returns_nothing(db_session, catalog):
+    for query in ("asdfgh qwerty", "xkcdqz zzzz"):
+        assert search.search(db_session, query, limit=10) == ([], "hybrid", None)
+
+
+def test_unknown_words_need_a_closer_semantic_match(db_session, catalog, monkeypatch):
+    """No query word is known to the shop -> MAX_DISTANCE_UNKNOWN_WORDS applies."""
+    used = []
+    real = product_repository.nearest_by_vector
+    monkeypatch.setattr(product_repository, "nearest_by_vector",
+                        lambda *a, **kw: used.append(kw["max_distance"]) or real(*a, **kw))
+    search.search(db_session, "blorptang", limit=5)
+    search.search(db_session, "zorblax", limit=5)
+    assert used == [search.MAX_DISTANCE_UNKNOWN_WORDS, search.MAX_DISTANCE]
+
+
+def test_vocabulary_is_rebuilt_after_admin_adds_a_product(db_session, admin, fake_embedder):
+    first = catalog_service.search("glimmerqua", limit=5)  # builds + caches vocabulary
+    assert first.corrected_query is None
+    category_id = catalog_service.list_categories()[0].id
+    catalog_service.create_product(admin, category_id, "Glimmerquartz Lamp", "A lamp.", "99")
+    assert catalog_service.search("glimmerquarz", limit=5).corrected_query == "glimmerquartz"
+
+
+# ---------------------------------------------------------------------------
 # catalog_service.search_products
 # ---------------------------------------------------------------------------
 
@@ -120,6 +199,17 @@ def test_search_products_returns_product_summaries(db_session, catalog):
     assert all(isinstance(r, ProductSummary) for r in results)
     assert results[0].id == catalog["gloves"] and results[0].name == "Zorblax Wool Gloves"
     assert results[0].stock == 10 and results[0].category.startswith("Test Category")
+
+
+def test_search_returns_results_with_correction(db_session, catalog):
+    result = catalog_service.search("  zorblx gloves ", limit=5)
+    assert isinstance(result, SearchResults)
+    assert result.query == "zorblx gloves"
+    assert result.corrected_query == "zorblax gloves"
+    assert result.products[0].id == catalog["gloves"]
+
+    exact = catalog_service.search("zorblx gloves", limit=5, correct_spelling=False)
+    assert exact.corrected_query is None
 
 
 def test_search_products_validation(db_session):

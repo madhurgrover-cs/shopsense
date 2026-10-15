@@ -50,3 +50,17 @@ def test_is_search_model_loaded(monkeypatch):
     assert system_service.is_search_model_loaded() is False
     monkeypatch.setattr(embeddings, "_model", object())
     assert system_service.is_search_model_loaded() is True
+
+
+def test_preload_search_model(monkeypatch):
+    loads = []
+    monkeypatch.setattr(embeddings, "get_model", lambda: loads.append(1) or "model")
+    assert system_service.preload_search_model() is True
+    assert loads == [1]
+
+
+def test_preload_search_model_failure_is_reported_not_raised(monkeypatch):
+    def offline():
+        raise OSError("could not download model")
+    monkeypatch.setattr(embeddings, "get_model", offline)
+    assert system_service.preload_search_model() is False
