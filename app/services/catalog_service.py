@@ -11,7 +11,7 @@ from app.exceptions import NotFoundError, ValidationError
 from app.repositories import product_repository
 from app.services import audit_service
 from app.services.validation import parse_int
-from app.services.auth_service import require_admin
+from app.services.auth_service import require_admin, require_login
 from app.services.dto import CategoryInfo, ProductDetail, ProductSummary, SearchResults
 from app.services.user_session import UserSession
 
@@ -89,6 +89,21 @@ def similar_products(product_id: int, limit: int = 5) -> list[ProductSummary]:
     with get_session() as session:
         matches = recommend.similar_products(session, product_id, limit)
         return _summaries(session, [pid for pid, _distance in matches])
+
+
+MAX_RECOMMENDED = 8
+
+
+def recommended_for_you(user: UserSession,
+                        limit: int = MAX_RECOMMENDED) -> list[ProductSummary]:
+    """Products picked for this customer from what they have bought (see
+    recommend.recommended_for_user); top-rated products if they haven't bought yet."""
+    require_login(user)
+    if not isinstance(limit, int) or isinstance(limit, bool)             or not 1 <= limit <= MAX_RECOMMENDED:
+        raise ValidationError(f"Limit must be between 1 and {MAX_RECOMMENDED}.")
+    with get_session() as session:
+        ids = recommend.recommended_for_user(session, user.user_id, limit)
+        return _summaries(session, ids)
 
 
 def _summaries(session, product_ids: list[int]) -> list[ProductSummary]:

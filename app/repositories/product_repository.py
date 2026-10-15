@@ -150,7 +150,9 @@ def get_embedding(session: Session, product_id: int) -> list[float] | None:
 
 def nearest_by_vector(session: Session, vector: Sequence[float], limit: int,
                       exclude_id: int | None = None,
-                      max_distance: float | None = None) -> list[tuple[int, float]]:
+                      max_distance: float | None = None,
+                      exclude_ids: Sequence[int] = (),
+                      in_stock_only: bool = False) -> list[tuple[int, float]]:
     """[(product id, cosine distance)] of ACTIVE products closest to `vector`.
 
     `ORDER BY embedding <=> :vector LIMIT n` is exactly the query shape the HNSW index
@@ -166,9 +168,26 @@ def nearest_by_vector(session: Session, vector: Sequence[float], limit: int,
     )
     if exclude_id is not None:
         stmt = stmt.where(ProductEmbedding.product_id != exclude_id)
+    if exclude_ids:
+        stmt = stmt.where(ProductEmbedding.product_id.not_in(exclude_ids))
+    if in_stock_only:
+        stmt = stmt.join(Inventory, Inventory.product_id == Product.id).where(Inventory.stock > 0)
     if max_distance is not None:
         stmt = stmt.where(distance <= max_distance)
     return [(row.product_id, float(row.distance)) for row in session.execute(stmt)]
+
+
+def average_embedding(session: Session, product_ids: Sequence[int]) -> list[float] | None:
+    """The average of these products' embeddings, computed by pgvector's avg(vector)
+    aggregate in the database. None if none of them has an embedding."""
+    if not product_ids:
+        return None
+    vector = session.scalar(
+        # type_: tell SQLAlchemy the average is a vector too (else it arrives as text).
+        select(func.avg(ProductEmbedding.embedding, type_=ProductEmbedding.embedding.type))
+        .where(ProductEmbedding.product_id.in_(product_ids))
+    )
+    return None if vector is None else [float(x) for x in vector]
 
 
 def distances_for(session: Session, vector: Sequence[float],
@@ -239,6 +258,39 @@ def vocabulary_texts(session: Session) -> tuple[list[str], list[str]]:
     ).all()
     categories = list(session.scalars(select(Category.name)))
     return [r.name for r in rows] + categories, [r.description for r in rows]
+
+
+def purchased_product_ids(session: Session, user_id: int,
+                          statuses: Sequence[str]) -> list[int]:
+    """Distinct ids of products in this user's orders that have one of these statuses."""
+    stmt = (
+        select(OrderItem.product_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(Order.user_id == user_id, Order.status.in_(statuses))
+        .distinct()
+        .order_by(OrderItem.product_id)
+    )
+    return list(session.scalars(stmt))
+
+
+def top_rated_ids(session: Session, limit: int, exclude_ids: Sequence[int] = (),
+                  min_reviews: int = 2) -> list[int]:
+    """Active, in-stock products with the best average rating (at least `min_reviews`
+    reviews, so one lucky 5-star review doesn't win); ties: more reviews first."""
+    avg_rating = func.avg(Review.rating)
+    stmt = (
+        select(Product.id)
+        .join(Review, Review.product_id == Product.id)
+        .join(Inventory, Inventory.product_id == Product.id)
+        .where(Product.is_active, Inventory.stock > 0)
+        .group_by(Product.id, Product.name)
+        .having(func.count(Review.id) >= min_reviews)
+        .order_by(avg_rating.desc(), func.count(Review.id).desc(), Product.name)
+        .limit(limit)
+    )
+    if exclude_ids:
+        stmt = stmt.where(Product.id.not_in(exclude_ids))
+    return list(session.scalars(stmt))
 
 
 def co_purchased_with(session: Session, product_id: int, limit: int,

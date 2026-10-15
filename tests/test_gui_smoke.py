@@ -72,6 +72,7 @@ def fake_services(monkeypatch):
     s(shop_screen.catalog_service, "search",
       lambda query, limit, correct_spelling=True: SearchResults(query, [SOCKS]))
     s(shop_screen.system_service, "is_search_model_loaded", lambda: True)
+    s(shop_screen.catalog_service, "recommended_for_you", lambda user: [SOCKS, HOODIE])
     detail = ProductDetail(**{**HOODIE.__dict__, "description": "Warm fleece."})
     s(product_screen.catalog_service, "get_product_detail", lambda pid: detail)
     s(product_screen.catalog_service, "frequently_bought_together", lambda pid, n: [SOCKS])
@@ -136,6 +137,52 @@ def test_customer_login_opens_shop_with_cards(window, fake_services, monkeypatch
     assert "Test Fleece Hoodie" in on_screen and "₹1,299.00" in on_screen
     assert "★ 4.5 (2)" in on_screen and " Positive " in on_screen
     assert "No reviews yet" in on_screen  # the socks
+
+
+def test_recommended_row_on_default_view(window, fake_services):
+    shop = window._screens["shop"]
+    shop._clear_search()
+    pump(window)
+    assert shop._recommended.winfo_manager() == "pack"
+    on_screen = texts(shop._recommended)
+    assert "Recommended for you" in on_screen
+    assert on_screen.index("Test Sports Socks") < on_screen.index("Test Fleece Hoodie")
+    assert "Test Sports Socks" in texts(shop._grid)  # the normal grid is still there
+
+
+def test_recommended_row_hidden_on_search_and_category(window, fake_services):
+    shop = window._screens["shop"]
+    shop._clear_search()
+    pump(window)
+    shop._category.set("Footwear (1)")
+    shop._load_category()
+    pump(window)
+    assert shop._recommended.winfo_manager() == ""      # category filter: hidden
+    shop._search.insert(0, "socks")
+    shop._run_search()
+    pump(window)
+    assert shop._recommended.winfo_manager() == ""      # search results: hidden
+    shop._clear_search()
+    pump(window)
+    assert shop._recommended.winfo_manager() == "pack"  # back to default: shown again
+
+
+def test_recommended_row_without_results_or_on_error(window, fake_services, monkeypatch):
+    shop = window._screens["shop"]
+    shop._clear_search()
+    monkeypatch.setattr(shop_screen.catalog_service, "recommended_for_you", lambda user: [])
+    shop.on_show()
+    pump(window)
+    assert shop._recommended.winfo_manager() == ""      # nothing to recommend: no row
+
+    def broken(user):
+        raise RuntimeError("database down")
+    monkeypatch.setattr(shop_screen.catalog_service, "recommended_for_you", broken)
+    popups = len(window.popups)
+    shop.on_show()
+    pump(window)
+    assert shop._recommended.winfo_manager() == ""
+    assert len(window.popups) == popups  # a missing row is not worth an error popup
 
 
 def test_category_filter_and_search(window, fake_services):
