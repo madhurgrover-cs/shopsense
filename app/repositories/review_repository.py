@@ -100,3 +100,13 @@ def set_scores(session: Session, scores: dict[int, float | None]) -> None:
             update(Review),
             [{"id": rid, "sentiment_score": s} for rid, s in scores.items()],
         )
+
+
+def list_with_ratings(session: Session) -> list[Row]:
+    """(id, product_id, rating, comment, sentiment_score) of every review with text, by
+    id. Used to compare sentiment engines against the customers' own star ratings."""
+    stmt = (select(Review.id, Review.product_id, Review.rating, Review.comment,
+                   Review.sentiment_score)
+            .where(Review.comment.is_not(None))
+            .order_by(Review.id))
+    return list(session.execute(stmt))

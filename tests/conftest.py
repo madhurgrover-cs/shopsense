@@ -220,6 +220,48 @@ def gui_app():
     patch.undo()
 
 
+NEGATIVE_WORDS = ("terrible", "awful", "horrible", "broke", "broken", "waste", "poor",
+                  "bad", "disappointed", "not happy", "expected much better", "cheap")
+POSITIVE_WORDS = ("love", "excellent", "great", "perfect", "perfectly", "amazing", "nice",
+                  "happy")
+
+
+def fake_sentiment(text: str) -> float:
+    """A stand-in for DistilBERT: counts clearly positive / negative words. Negative
+    phrases are checked first, so "not happy" is negative. Clear text scores +/-0.9,
+    a tie (e.g. "decent, nothing special") -0.5, like a mixed review."""
+    lowered = text.lower()
+    negative = sum(lowered.count(w) for w in NEGATIVE_WORDS)
+    positive = sum(lowered.count(w) for w in POSITIVE_WORDS) - lowered.count("not happy")
+    if negative > positive:
+        return -0.9
+    if positive > negative:
+        return 0.9
+    return -0.5
+
+
+@pytest.fixture(autouse=True)
+def fake_sentiment_model(request, monkeypatch):
+    """Unit tests never load the real sentiment model (~270 MB, seconds per load): its
+    scoring function is replaced by fake_sentiment. Tests marked "integration" get the
+    real model, and tests marked "real_sentiment_code" the real loading code (they
+    install a fake transformers package themselves). The calls are recorded so tests
+    can count model loads."""
+    if (request.node.get_closest_marker("integration")
+            or request.node.get_closest_marker("real_sentiment_code")):
+        yield None
+        return
+    from app.ai import sentiment
+    calls: list[list[str]] = []
+
+    def fake_transformer_scores(texts):
+        calls.append(list(texts))
+        return [fake_sentiment(t) for t in texts]
+    monkeypatch.setattr(sentiment, "transformer_scores", fake_transformer_scores)
+    monkeypatch.setattr(sentiment, "_model_failed", False)
+    yield calls
+
+
 @pytest.fixture(autouse=True)
 def fresh_spelling_vocabulary():
     """The spelling vocabulary is cached for 5 minutes. Clear it around every test, so

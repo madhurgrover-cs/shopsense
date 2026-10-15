@@ -1,4 +1,5 @@
-"""Product reviews with VADER sentiment scores, product badges and flagged reviews."""
+"""Product reviews with sentiment scores (DistilBERT, VADER fallback), product badges
+and flagged reviews."""
 
 from sqlalchemy.exc import IntegrityError
 
@@ -36,7 +37,9 @@ def reviewable_products(user: UserSession, order_id: int) -> set[int]:
 def add_review(user: UserSession, product_id: int, rating: int,
                comment: str | None = None) -> ReviewInfo:
     """Add a review. Only for a product the user received (a DELIVERED order), and
-    only once per product. The sentiment score is computed here, when it is saved."""
+    only once per product. The sentiment score is computed here, when it is saved: this
+    loads the sentiment model for a few seconds, so the GUI calls it in a background
+    thread (it already does, like every service call)."""
     require_login(user)
     if not isinstance(rating, int) or isinstance(rating, bool) or not 1 <= rating <= 5:
         raise ValidationError("Rating must be a whole number from 1 to 5.")

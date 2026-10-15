@@ -15,6 +15,7 @@ reportlab>=4.1            # PDF export
 
 # --- AI (CPU only) ---
 sentence-transformers>=3.0
+transformers>=4.40        # DistilBERT review sentiment (also used by sentence-transformers)
 vaderSentiment>=3.3
 rapidfuzz>=3.9            # spelling correction for search ("sirt" -> "shirt")
 

@@ -87,3 +87,25 @@ def test_real_catalog_normal_queries_are_not_corrected(db_session, query):
 def test_real_catalog_gibberish_returns_nothing(db_session, query):
     result = catalog_service.search(query, limit=10)
     assert result.products == [] and result.corrected_query is None
+
+
+@pytest.mark.integration
+def test_real_sentiment_model():
+    """The real DistilBERT model, with the calibrated thresholds (sentiment.py)."""
+    from app.ai import sentiment
+
+    expected_better = ("Poor quality cricket ball. Customer support was slow and "
+                       "unhelpful. I expected much better.")
+    texts = [expected_better,
+             "Excellent kettle, boils fast and looks great. Very happy with it.",
+             "Average power bank. Some good points, some bad points. Mixed feelings overall.",
+             "Terrible. Broke after two days, total waste of money."]
+    (complaint, praise, mixed, angry), engine = sentiment.score_many_with_engine(texts)
+
+    assert engine == sentiment.TRANSFORMER
+    assert sentiment.vader_score(expected_better) > 0      # VADER: fooled by "better"
+    assert sentiment.is_flagged(complaint)                 # the model: a complaint
+    assert sentiment.is_flagged(angry)
+    assert praise > sentiment.POSITIVE_THRESHOLD
+    assert sentiment.FLAG_THRESHOLD < mixed < 0            # mixed: negative-ish, not flagged
+    assert not sentiment.is_model_loaded()                 # unloaded right after scoring

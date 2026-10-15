@@ -1,4 +1,6 @@
-"""Tests for VADER sentiment, review_service and the sentiment backfill script."""
+"""Tests for review_service, the badge / flag thresholds and the sentiment backfill
+script. Sentiment scores come from the fake model in conftest (fake_sentiment_model);
+the scoring module itself is tested in test_sentiment.py."""
 
 import pytest
 
@@ -27,17 +29,18 @@ def test_score_without_text_is_none(text):
 
 @pytest.mark.parametrize("average, expected", [
     (None, None),
-    (0.25, "Positive"), (0.9, "Positive"),
-    (0.2499, "Mixed"), (0.0, "Mixed"), (-0.2499, "Mixed"),
-    (-0.25, "Negative"), (-0.9, "Negative"),
+    (0.35, "Positive"), (0.9, "Positive"),
+    (0.3499, "Mixed"), (0.0, "Mixed"), (-0.3499, "Mixed"),
+    (-0.35, "Negative"), (-0.9, "Negative"),
 ])
 def test_badge_thresholds(average, expected):
     assert sentiment.badge(average) == expected
 
 
 def test_is_flagged_is_strictly_below_threshold():
-    assert sentiment.is_flagged(-0.31)
-    assert not sentiment.is_flagged(-0.3)
+    assert sentiment.is_flagged(-0.76)
+    assert not sentiment.is_flagged(-0.75)
+    assert not sentiment.is_flagged(-0.6)   # a typical mixed 3-star review: not flagged
     assert not sentiment.is_flagged(None)
 
 
@@ -152,8 +155,8 @@ def test_list_flagged_reviews(factory, admin):
     pid = factory.product()
     users = [factory.user().user_id for _ in range(3)]
     worst = factory.review(users[0], pid, 1, "Awful", score=-0.95)
-    bad = factory.review(users[1], pid, 2, "Bad", score=-0.31)
-    borderline = factory.review(users[2], pid, 3, "Hmm", score=-0.3)   # not below -0.3
+    bad = factory.review(users[1], pid, 2, "Bad", score=-0.76)
+    borderline = factory.review(users[2], pid, 3, "Hmm", score=-0.75)  # not below -0.75
 
     flagged_ids = [r.id for r in review_service.list_flagged_reviews(admin)]
     assert worst in flagged_ids and bad in flagged_ids and borderline not in flagged_ids
@@ -176,28 +179,40 @@ def test_backfill_scores_unscored_reviews_and_is_rerunnable(factory, db_session)
     negative = factory.review(b, pid, 1, "Horrible, broke immediately.")
     no_text = factory.review(c, pid, 3, None)
 
-    scored, changed = backfill()
+    scored, changed, engine = backfill()
     assert scored >= 2 and changed >= 2  # also any unscored seed reviews, inside the rollback
+    assert engine == sentiment.TRANSFORMER
 
     db_session.expire_all()
     assert db_session.get(Review, positive).sentiment_score > 0.5
     assert db_session.get(Review, negative).sentiment_score < -0.5
     assert db_session.get(Review, no_text).sentiment_score is None  # nothing to score
 
-    assert backfill() == (0, 0)  # second run: nothing left to do
+    assert backfill() == (0, 0, None)  # second run: nothing left to do
 
 
 def test_backfill_all_rescores_and_reports_changes(factory, db_session):
     pid = factory.product()
     stale = factory.review(factory.user().user_id, pid, 5, "Excellent, works perfectly!",
                            score=-0.99)  # wrong on purpose
-    backfill()  # make sure everything else is scored first
+    backfill(rescore_all=True)  # bring every review to the current model's score first
+    db_session.get(Review, stale).sentiment_score = -0.99
+    db_session.commit()
 
     total_reviews = db_session.query(Review).count()
-    scored, changed = backfill(rescore_all=True)
+    scored, changed, _engine = backfill(rescore_all=True)
     assert scored == total_reviews and changed == 1  # only the stale one changes
     db_session.expire_all()
     assert db_session.get(Review, stale).sentiment_score > 0.5
+
+
+def test_backfill_loads_the_model_once(factory, fake_sentiment_model):
+    pid = factory.product()
+    for text in ("Love it", "Broke on day one", "Nice"):
+        factory.review(factory.user().user_id, pid, 3, text)
+    fake_sentiment_model.clear()
+    backfill()
+    assert len(fake_sentiment_model) == 1  # one batch call = one model load for all
 
 
 # ---------------------------------------------------------------------------

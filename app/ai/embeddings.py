@@ -14,22 +14,22 @@ Memory rule (4 GB RAM laptop): the model is loaded LAZILY, ONCE.
 """
 
 import os
-import threading
 
+from app.ai import model_lock
 from app.models.catalog import EMBEDDING_DIM
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_BATCH_SIZE = 32  # small batches keep peak memory low
 
 _model = None
-_model_lock = threading.Lock()
 
 
 def get_model():
     """Return the shared model, loading it on the first call only."""
     global _model
     if _model is None:
-        with _model_lock:
+        # model_lock.LOADING is shared with the sentiment model: never load two at once.
+        with model_lock.LOADING:
             if _model is None:  # re-check: another thread may have loaded it meanwhile
                 # Windows can't create the symlinks Hugging Face's cache prefers; it
                 # falls back to copying files and warns every time. Silence that.

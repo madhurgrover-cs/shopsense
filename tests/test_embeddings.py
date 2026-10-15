@@ -29,11 +29,14 @@ def test_importing_the_app_does_not_load_torch():
         "import sys\n"
         "import app.ai.embeddings, app.services.catalog_service, app.services.cart_service\n"
         "import app.services.order_service, app.services.auth_service\n"
-        "print('torch' in sys.modules, 'sentence_transformers' in sys.modules)\n"
+        "import app.ai.sentiment, app.services.review_service, app.gui.app\n"
+        "print('torch' in sys.modules, 'sentence_transformers' in sys.modules,\n"
+        "      'transformers' in sys.modules)\n"
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                             check=True)
-    assert result.stdout.strip() == "False False"
+    # Neither AI model's libraries are imported by starting the app (incl. the GUI).
+    assert result.stdout.strip() == "False False False"
 
 
 class FakeModel:
