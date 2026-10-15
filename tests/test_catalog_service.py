@@ -234,3 +234,45 @@ def test_products_carry_sentiment_badge(factory):
     badges = {p.id: p.sentiment_badge for p in catalog_service.browse_products(cat)}
     assert badges == {liked: "Positive", disliked: "Negative", unreviewed: None}
     assert catalog_service.get_product_detail(liked).sentiment_badge == "Positive"
+
+
+# ---------------------------------------------------------------------------
+# Admin: restore, and numbers typed as text
+# ---------------------------------------------------------------------------
+
+def test_restore_product(factory, admin):
+    pid = factory.product()
+    catalog_service.delete_product(admin, pid)
+    catalog_service.restore_product(admin, pid)
+    assert catalog_service.get_product_detail(pid).is_active
+    entries = factory.audit_entries("product", pid)
+    assert [e.action for e in entries] == ["delete", "restore"]
+    assert entries[-1].user_id == admin.user_id
+
+    catalog_service.restore_product(admin, pid)  # already active: no change, no new entry
+    assert len(factory.audit_entries("product", pid)) == 2
+
+
+def test_restore_product_errors(factory, admin, customer):
+    with pytest.raises(NotFoundError):
+        catalog_service.restore_product(admin, -1)
+    with pytest.raises(PermissionDeniedError):
+        catalog_service.restore_product(customer, factory.product(active=False))
+
+
+def test_stock_can_be_typed_as_text(factory, admin):
+    pid = factory.product(stock=3)
+    assert catalog_service.update_stock(admin, pid, " 25 ") == 25
+    assert factory.stock(pid) == 25
+    detail = catalog_service.create_product(admin, factory.category(), "Test Typed Stock", "",
+                                            "10", "7")
+    assert detail.stock == 7
+
+
+@pytest.mark.parametrize("bad", ["2.5", "abc", "", "-1", "1000001", 2.5, True])
+def test_bad_stock_text_is_rejected(factory, admin, bad):
+    pid = factory.product(stock=3)
+    with pytest.raises(ValidationError, match="Stock"):
+        catalog_service.update_stock(admin, pid, bad)
+    assert factory.stock(pid) == 3
+    assert factory.audit_entries("stock", pid) == []

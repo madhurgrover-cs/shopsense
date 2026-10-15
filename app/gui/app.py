@@ -11,18 +11,28 @@ current screen on the right.
     |  Log out  |                                                |
     +-----------+------------------------------------------------+
 
-Screens depend on who is logged in. Guests get Login / Register. On login, the
-screens for that role are created; on logout they are destroyed, so nothing from one
-user's session (cart, orders, typed text) can leak into the next one.
+Screens depend on who is logged in. Guests get Login / Register, customers the shop,
+admins their own sidebar (dashboard, products, orders, ...). On login, the screens for
+that role are created; on logout they are destroyed, so nothing from one user's
+session (cart, orders, typed text) can leak into the next one.
 """
 
+import gc
 import logging
 import threading
+from tkinter import filedialog
 
 import customtkinter as ctk
 
 from app.gui import theme
-from app.gui.screens.admin import AdminHomeScreen
+from app.gui.screens.admin.audit import AuditLogScreen
+from app.gui.screens.admin.coupons import CouponsScreen
+from app.gui.screens.admin.dashboard import DashboardScreen
+from app.gui.screens.admin.orders import AdminOrdersScreen
+from app.gui.screens.admin.products import ProductsScreen
+from app.gui.screens.admin.reports import ReportsScreen
+from app.gui.screens.admin.reviews import FlaggedReviewsScreen
+from app.gui.screens.admin.users import CustomersScreen
 from app.gui.screens.base import Screen
 from app.gui.screens.cart import CartScreen
 from app.gui.screens.login import LoginScreen
@@ -33,7 +43,7 @@ from app.gui.screens.shop import ShopScreen
 from app.gui.tasks import TaskRunner
 from app.gui.theme import COLORS, PAD_L, PAD_M, PAD_S
 from app.gui.widgets.common import label, muted
-from app.gui.widgets.dialogs import MessageDialog, show_error
+from app.gui.widgets.dialogs import ConfirmDialog, MessageDialog, show_error
 from app.gui.widgets.sidebar import Sidebar
 from app.gui.widgets.status import StatusIndicator
 from app.services import system_service
@@ -48,7 +58,16 @@ GUEST_SCREENS = [("login", "Sign in", LoginScreen), ("register", "Create account
 CUSTOMER_SCREENS = [("shop", "Shop", ShopScreen), ("cart", "Cart", CartScreen),
                     ("orders", "My Orders", OrdersScreen)]
 CUSTOMER_HIDDEN_SCREENS = [("product", ProductScreen)]
-ADMIN_SCREENS = [("admin", "Admin", AdminHomeScreen)]
+ADMIN_SCREENS = [
+    ("admin_dashboard", "Dashboard", DashboardScreen),
+    ("admin_products", "Products", ProductsScreen),
+    ("admin_orders", "Orders", AdminOrdersScreen),
+    ("admin_coupons", "Coupons", CouponsScreen),
+    ("admin_reviews", "Flagged reviews", FlaggedReviewsScreen),
+    ("admin_reports", "Reports", ReportsScreen),
+    ("admin_users", "Customers", CustomersScreen),
+    ("admin_audit", "Audit log", AuditLogScreen),
+]
 
 AI_POLL_MS = 500  # how often the main thread checks whether the AI model has loaded
 # AI model state -> (top bar text, colour key)
@@ -69,6 +88,7 @@ class ShopSenseApp(ctk.CTk):
 
         self.user: UserSession | None = None
         self.cart_coupon: str | None = None  # code applied in the cart (not stored in the DB)
+        self.export_folder: str | None = None  # last folder reports were saved to
         self.tasks = TaskRunner(self, on_busy_change=self._on_busy_change,
                                 on_error=self.show_error)
         self._ai_loader: threading.Thread | None = None
@@ -136,6 +156,11 @@ class ShopSenseApp(ctk.CTk):
             screen.destroy()
         self._screens.clear()
         self._current = None
+        # Free the destroyed screens NOW, on the main thread. Otherwise Python's garbage
+        # collector frees them later on whichever thread happens to be allocating, often
+        # a background task (e.g. building a PDF), and Tk objects must only be touched
+        # from the main thread: tkinter then waits ~1 s per object for the main thread.
+        gc.collect()
         for key, _label, cls in visible:
             self._add_screen(key, cls)
         for key, cls in hidden:
@@ -175,7 +200,7 @@ class ShopSenseApp(ctk.CTk):
         self.cart_coupon = None
         if user.is_admin:
             self._set_screens(ADMIN_SCREENS)
-            start = "admin"
+            start = "admin_dashboard"
         else:
             self._set_screens(CUSTOMER_SCREENS, CUSTOMER_HIDDEN_SCREENS)
             start = "shop"
@@ -262,6 +287,20 @@ class ShopSenseApp(ctk.CTk):
 
     def show_message(self, title: str, message: str, kind: str = "info") -> None:
         MessageDialog(self, title, message, kind=kind)
+
+    def confirm(self, title: str, message: str, on_confirm, confirm_text: str = "Confirm",
+                danger: bool = True) -> None:
+        """Ask "are you sure?"; on_confirm() runs only if the user confirms."""
+        ConfirmDialog(self, title, message, on_confirm, confirm_text=confirm_text,
+                      danger=danger)
+
+    def ask_folder(self, title: str) -> str:
+        """Let the user pick a folder (e.g. for report exports). "" if they cancel."""
+        folder = filedialog.askdirectory(parent=self, title=title, mustexist=True,
+                                         initialdir=self.export_folder or None)
+        if folder:
+            self.export_folder = folder
+        return folder or ""
 
     def _on_close(self) -> None:
         self.tasks.shutdown()

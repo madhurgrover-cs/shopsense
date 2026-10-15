@@ -10,6 +10,7 @@ from app.db import get_session
 from app.exceptions import NotFoundError, ValidationError
 from app.repositories import product_repository
 from app.services import audit_service
+from app.services.validation import parse_int
 from app.services.auth_service import require_admin
 from app.services.dto import CategoryInfo, ProductDetail, ProductSummary, SearchResults
 from app.services.user_session import UserSession
@@ -116,7 +117,7 @@ def create_product(admin: UserSession, category_id: int, name: str, description:
     require_admin(admin)
     name = _validate_name(name)
     price = _validate_price(price)
-    _validate_stock(stock)
+    stock = _validate_stock(stock)
     with get_session() as session:
         if not product_repository.category_exists(session, category_id):
             raise ValidationError("Category does not exist.")
@@ -193,10 +194,27 @@ def delete_product(admin: UserSession, product_id: int) -> None:
             ai_search.clear_vocabulary_cache()
 
 
-def update_stock(admin: UserSession, product_id: int, new_stock: int) -> int:
-    """Set the stock level (e.g. after a delivery from the supplier)."""
+def restore_product(admin: UserSession, product_id: int) -> None:
+    """Undo a soft delete: show the product in the shop again."""
     require_admin(admin)
-    _validate_stock(new_stock)
+    with get_session() as session:
+        product = product_repository.get(session, product_id)
+        if product is None:
+            raise NotFoundError("Product not found.")
+        if not product.is_active:
+            product.is_active = True
+            audit_service.record_admin_action(
+                session, admin, audit_service.RESTORE, audit_service.PRODUCT, product.id,
+                details=f"restored {product.name!r}",
+            )
+            ai_search.clear_vocabulary_cache()
+
+
+def update_stock(admin: UserSession, product_id: int, new_stock: int | str) -> int:
+    """Set the stock level (e.g. after a delivery from the supplier). Accepts the
+    number as text too ("25"), as typed into the admin form."""
+    require_admin(admin)
+    new_stock = _validate_stock(new_stock)
     with get_session() as session:
         # Lock the row so this doesn't overwrite a checkout that is decrementing it.
         locked = product_repository.lock_inventory(session, [product_id])
@@ -242,9 +260,11 @@ def _validate_price(price) -> Decimal:
     return value.quantize(Decimal("0.01"))
 
 
-def _validate_stock(stock: int) -> None:
-    if not isinstance(stock, int) or isinstance(stock, bool) or stock < 0:
-        raise ValidationError("Stock must be a whole number, 0 or more.")
+MAX_STOCK = 1_000_000
+
+
+def _validate_stock(stock: int | str) -> int:
+    return parse_int(stock, "Stock", minimum=0, maximum=MAX_STOCK)
 
 
 def _short(value) -> str:

@@ -37,6 +37,10 @@ def day(moment: datetime) -> str:
     return moment.astimezone().strftime("%d %b %Y")
 
 
+def now() -> datetime:
+    return datetime.now().astimezone()
+
+
 def rating(avg: float | None, count: int) -> str:
     """"★ 4.3 (12)" or "No reviews yet"."""
     if not count or avg is None:

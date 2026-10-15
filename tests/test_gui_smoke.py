@@ -289,12 +289,3 @@ def test_logout_returns_to_login_and_clears_screens(window):
     assert window._screens["login"]._email.get() == CUSTOMER.email  # remembered for convenience
 
 
-def test_admin_login_opens_admin_placeholder(window, monkeypatch):
-    preloads = []
-    monkeypatch.setattr(app_module.system_service, "preload_search_model",
-                        lambda: preloads.append(1))
-    login_as(window, ADMIN, monkeypatch)
-    assert window._current == "admin" and set(window._screens) == {"admin"}
-    assert preloads == [] and window._ai_status.cget("text") == ""  # admins don't search
-    assert "Welcome, Admin One" in texts(window._screens["admin"])
-    window.logout()

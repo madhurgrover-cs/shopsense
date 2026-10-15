@@ -1,7 +1,7 @@
 """Coupon validation, discount maths, and admin coupon management."""
 
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy.exc import IntegrityError
@@ -15,6 +15,7 @@ from app.services import audit_service
 from app.services.auth_service import require_admin
 from app.services.dto import CouponInfo
 from app.services.user_session import UserSession
+from app.services.validation import IST, parse_date, parse_int
 
 CODE_PATTERN = re.compile(r"^[A-Z0-9]{3,30}$")
 MIN_PERCENT, MAX_PERCENT = 1, 90  # same range as the CHECK constraint on coupons
@@ -63,14 +64,23 @@ def list_coupons(admin: UserSession) -> list[CouponInfo]:
         return [_to_info(c) for c in coupon_repository.list_all(session)]
 
 
-def create_coupon(admin: UserSession, code: str, percent_off: int,
-                  valid_until: datetime) -> CouponInfo:
+def create_coupon(admin: UserSession, code: str, percent_off: int | str,
+                  valid_until: datetime | date | str) -> CouponInfo:
+    """percent_off may be text ("15"). valid_until may be an exact moment (datetime
+    with a time zone) or just a day (date or "YYYY-MM-DD"): then the coupon works until
+    the END of that day, India time."""
     require_admin(admin)
     code = normalise_code(code)
     if not CODE_PATTERN.match(code):
         raise ValidationError("Coupon code must be 3-30 letters or digits, no spaces.")
-    if not isinstance(percent_off, int) or not MIN_PERCENT <= percent_off <= MAX_PERCENT:
-        raise ValidationError(f"Discount must be a whole number from {MIN_PERCENT} to {MAX_PERCENT}%.")
+    try:
+        percent_off = parse_int(percent_off, "Discount", MIN_PERCENT, MAX_PERCENT)
+    except ValidationError:  # one message for every kind of bad discount
+        raise ValidationError(f"Discount must be a whole number from {MIN_PERCENT} "
+                              f"to {MAX_PERCENT}%.") from None
+    if not isinstance(valid_until, datetime):
+        day = parse_date(valid_until, "Expiry date")
+        valid_until = datetime.combine(day, time(23, 59, 59), IST)
     if valid_until.tzinfo is None:
         raise ValidationError("Expiry date must include a time zone.")
     if valid_until <= utcnow():

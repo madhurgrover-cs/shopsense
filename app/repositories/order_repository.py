@@ -6,7 +6,7 @@ from decimal import Decimal
 from sqlalchemy import Row, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Order, OrderItem, OrderStatusHistory, Payment, Product
+from app.models import Order, OrderItem, OrderStatusHistory, Payment, Product, User
 
 
 def create_order(session: Session, user_id: int, subtotal: Decimal, discount: Decimal,
@@ -42,21 +42,30 @@ def get(session: Session, order_id: int, for_update: bool = False) -> Order | No
     return session.scalars(stmt).first()
 
 
-def list_orders(session: Session, user_id: int | None = None,
-                status: str | None = None) -> list[Row]:
-    """(order, item_count) rows, newest first; optionally one user's / one status."""
+def list_orders(session: Session, user_id: int | None = None, status: str | None = None,
+                created_from: datetime | None = None,
+                created_before: datetime | None = None) -> list[Row]:
+    """(Order, item_count, customer_name, customer_email) rows, newest first.
+    Optional filters: one user, one status, created_from <= created_at < created_before."""
     item_count = (
         select(func.coalesce(func.sum(OrderItem.qty), 0))
         .where(OrderItem.order_id == Order.id)
         .scalar_subquery()
     )
-    stmt = select(Order, item_count.label("item_count")).order_by(
-        Order.created_at.desc(), Order.id.desc()
+    stmt = (
+        select(Order, item_count.label("item_count"), User.name.label("customer_name"),
+               User.email.label("customer_email"))
+        .join(User, User.id == Order.user_id)
+        .order_by(Order.created_at.desc(), Order.id.desc())
     )
     if user_id is not None:
         stmt = stmt.where(Order.user_id == user_id)  # uses ix_orders_user_id_created_at
     if status is not None:
         stmt = stmt.where(Order.status == status)
+    if created_from is not None:
+        stmt = stmt.where(Order.created_at >= created_from)
+    if created_before is not None:
+        stmt = stmt.where(Order.created_at < created_before)
     return list(session.execute(stmt))
 
 

@@ -26,6 +26,7 @@ COLORS = {
     "accent": "#6C8CFF",
     "accent_hover": "#5A78E8",
     "danger": "#F06A6A",
+    "danger_hover": "#D85757",
     "success": "#4CC38A",
     "warning": "#F2C14E",
 }

@@ -1,5 +1,6 @@
 """Tests for checkout, order history and admin order-status updates."""
 
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
@@ -11,6 +12,7 @@ from app.exceptions import (
 from app.models import Order
 from app.repositories import order_repository
 from app.services import cart_service, catalog_service, order_service
+from app.services.validation import today
 
 
 def history(detail) -> list[tuple]:
@@ -246,3 +248,38 @@ def test_update_order_status_errors(factory, customer, admin):
     with pytest.raises(PermissionDeniedError):
         order_service.update_order_status(customer, order.id, "shipped")
     assert factory.audit_entries("order", order.id) == []
+
+
+def test_list_all_orders_includes_customer_and_filters_by_date(factory, customer, admin):
+    order = place_order(customer, factory)
+    todays = order_service.list_all_orders(admin, date_from=today(), date_to=today())
+    mine = next(o for o in todays if o.id == order.id)
+    assert (mine.customer_name, mine.customer_email) == (customer.name, customer.email)
+
+    as_text = order_service.list_all_orders(admin, date_from=today().isoformat(),
+                                            date_to=today().isoformat())
+    assert order.id in {o.id for o in as_text}
+    yesterday = today() - timedelta(days=1)
+    earlier = order_service.list_all_orders(admin, date_from=yesterday, date_to=yesterday)
+    assert order.id not in {o.id for o in earlier}
+    both = order_service.list_all_orders(admin, status="placed", date_from=today(),
+                                         date_to=today())
+    assert order.id in {o.id for o in both} and all(o.status == "placed" for o in both)
+
+
+def test_list_all_orders_date_errors(admin):
+    with pytest.raises(ValidationError, match="both"):
+        order_service.list_all_orders(admin, date_from="2026-10-01")
+    with pytest.raises(ValidationError, match="on or before"):
+        order_service.list_all_orders(admin, date_from="2026-10-02", date_to="2026-10-01")
+    with pytest.raises(ValidationError, match="YYYY-MM-DD"):
+        order_service.list_all_orders(admin, date_from="01/10/2026", date_to="2026-10-01")
+
+
+def test_next_statuses_follow_allowed_flow():
+    assert order_service.next_statuses("placed") == ["shipped", "cancelled"]
+    assert order_service.next_statuses("shipped") == ["delivered"]
+    assert order_service.next_statuses("delivered") == []
+    assert order_service.next_statuses("cancelled") == []
+    with pytest.raises(ValidationError):
+        order_service.next_statuses("lost")

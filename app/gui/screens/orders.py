@@ -8,10 +8,11 @@ import customtkinter as ctk
 from app.gui import formatting as fmt
 from app.gui import theme
 from app.gui.screens.base import Screen
-from app.gui.theme import COLORS, PAD_L, PAD_M, PAD_S, PAD_XL
+from app.gui.theme import COLORS, PAD_L, PAD_M, PAD_S
 from app.gui.widgets.common import (
     card, clear, empty_state, label, make_clickable, muted, pill, section_title,
 )
+from app.gui.widgets import order_parts
 from app.gui.widgets.review_dialog import ReviewDialog
 from app.services import order_service, review_service
 from app.services.dto import OrderDetail, OrderSummary
@@ -113,29 +114,9 @@ class OrdersScreen(Screen):
         pill(head, order.status.capitalize(), fmt.ORDER_STATUS_COLORS[order.status]).grid(
             row=0, column=1, rowspan=2, padx=PAD_L)
 
-        self._render_timeline(order)
+        order_parts.timeline(self._detail, order)
         self._render_items(order, page.reviewable)
-        self._render_totals(order)
-
-    def _render_timeline(self, order: OrderDetail) -> None:
-        section_title(self._detail, "Status timeline").pack(fill="x", padx=PAD_S, pady=(0, PAD_S))
-        box = card(self._detail)
-        box.pack(fill="x", padx=PAD_S, pady=(0, PAD_M))
-        for index, change in enumerate(order.timeline):
-            last = index == len(order.timeline) - 1
-            row = ctk.CTkFrame(box, fg_color="transparent")
-            row.pack(fill="x", padx=PAD_L, pady=(PAD_M if index == 0 else 0, PAD_M if last else 0))
-            dot_column = ctk.CTkFrame(row, fg_color="transparent", width=20)
-            dot_column.pack(side="left", fill="y")
-            ctk.CTkFrame(dot_column, width=12, height=12, corner_radius=6,
-                         fg_color=fmt.ORDER_STATUS_COLORS[change.new_status]).pack(pady=(4, 0))
-            if not last:  # vertical line connecting to the next step
-                ctk.CTkFrame(dot_column, width=2, height=26,
-                             fg_color=COLORS["border"]).pack()
-            text = ctk.CTkFrame(row, fg_color="transparent")
-            text.pack(side="left", fill="x", padx=PAD_M)
-            label(text, change.new_status.capitalize(), size=14, weight="bold").pack(fill="x")
-            muted(text, fmt.when(change.changed_at), size=12).pack(fill="x")
+        order_parts.totals(self._detail, order)
 
     def _render_items(self, order: OrderDetail, reviewable: set[int]) -> None:
         section_title(self._detail, "Items").pack(fill="x", padx=PAD_S, pady=(0, PAD_S))
@@ -159,24 +140,6 @@ class OrdersScreen(Screen):
                               command=lambda l=line: self._open_review(order.id, l),
                               **{**theme.secondary_button_style(), "height": 32}).grid(
                     row=row, column=2, padx=(0, PAD_L), pady=pady)
-
-    def _render_totals(self, order: OrderDetail) -> None:
-        box = card(self._detail)
-        box.pack(fill="x", padx=PAD_S, pady=(0, PAD_M))
-        rows = [("Subtotal", fmt.inr(order.subtotal))]
-        if order.discount:
-            rows.append((f"Discount ({order.coupon_code})", f"− {fmt.inr(order.discount)}"))
-        rows.append(("Total", fmt.inr(order.total)))
-        if order.payment:
-            rows.append(("Payment", f"{fmt.PAYMENT_METHOD_LABELS[order.payment.method]} "
-                                    f"· {order.payment.status}"))
-        for index, (name, value) in enumerate(rows):
-            line = ctk.CTkFrame(box, fg_color="transparent")
-            first, last = index == 0, index == len(rows) - 1
-            line.pack(fill="x", padx=PAD_L, pady=(PAD_M if first else 2, PAD_M if last else 2))
-            bold = "bold" if name == "Total" else "normal"
-            label(line, name, size=14, weight=bold).pack(side="left")
-            label(line, value, size=14, weight=bold).pack(side="right")
 
     # ------------------------------------------------------------------ reviews
 

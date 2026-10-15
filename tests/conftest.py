@@ -102,11 +102,16 @@ class Factory:
         return self._save(Review(user_id=user_id, product_id=product_id, rating=rating,
                                  comment=comment, sentiment_score=score)).id
 
-    def order(self, user_id: int, product_ids: list[int], status: str = "delivered") -> int:
-        """An order (price 1.00 per item) inserted directly, already in `status`."""
-        total = Decimal(len(product_ids))
+    def order(self, user_id: int, product_ids: list[int], status: str = "delivered",
+              unit_price: str = "1.00", created_at: datetime | None = None) -> int:
+        """An order (one of each product at unit_price) inserted directly, already in
+        `status`, placed now or at created_at."""
+        price = Decimal(unit_price)
+        total = price * len(product_ids)
         order = Order(user_id=user_id, status=status, subtotal=total, discount=0, total=total)
-        order.items = [OrderItem(product_id=pid, qty=1, unit_price=Decimal("1.00"))
+        if created_at is not None:
+            order.created_at = created_at
+        order.items = [OrderItem(product_id=pid, qty=1, unit_price=price)
                        for pid in product_ids]
         return self._save(order).id
 
@@ -196,9 +201,20 @@ def gui_app():
     patch.setattr(app_module, "show_error", lambda parent, title, message: popups.append(title))
     patch.setattr(app_module, "MessageDialog",
                   lambda parent, title, message, kind="info": popups.append(title))
+    # "Are you sure?" dialogs: record the title and answer with window.confirm_answer
+    # (a test sets it to False to check that "Cancel" really does nothing).
+    confirms: list[str] = []
+
+    def fake_confirm(parent, title, message, on_confirm, confirm_text="", danger=True):
+        confirms.append(title)
+        if window.confirm_answer:
+            on_confirm()
+    patch.setattr(app_module, "ConfirmDialog", fake_confirm)
     window = app_module.ShopSenseApp()
     window.withdraw()
     window.popups = popups
+    window.confirms = confirms
+    window.confirm_answer = True
     yield window
     window._on_close()
     patch.undo()

@@ -9,6 +9,7 @@ from app.exceptions import (
     InvalidCouponError, NotFoundError, PermissionDeniedError, ValidationError,
 )
 from app.services import coupon_service
+from app.services.validation import IST, today
 
 NEXT_MONTH = datetime.now(timezone.utc) + timedelta(days=30)
 
@@ -109,3 +110,25 @@ def test_list_coupons(factory, admin, customer):
     assert "TESTLISTED" in {c.code for c in coupon_service.list_coupons(admin)}
     with pytest.raises(PermissionDeniedError):
         coupon_service.list_coupons(customer)
+
+
+def test_create_coupon_from_form_text(admin):
+    """The admin form sends text: "15" and a date. The coupon then works until the END
+    of that day, India time."""
+    day = today() + timedelta(days=10)
+    info = coupon_service.create_coupon(admin, "testform15", " 15 ", day.isoformat())
+    assert (info.code, info.percent_off) == ("TESTFORM15", 15)
+    assert info.valid_until == datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=IST)
+    # A coupon expiring "today" is still valid for the rest of today.
+    assert coupon_service.create_coupon(admin, "testtoday", 5, today()).is_active
+
+
+@pytest.mark.parametrize("percent, valid_until, message", [
+    ("abc", "2099-01-01", "whole number from 1 to 90"),
+    ("95", "2099-01-01", "whole number from 1 to 90"),
+    ("10", "2020-01-01", "in the future"),
+    ("10", "31/12/2099", "YYYY-MM-DD"),
+])
+def test_create_coupon_form_errors(admin, percent, valid_until, message):
+    with pytest.raises(ValidationError, match=message):
+        coupon_service.create_coupon(admin, "TESTBAD", percent, valid_until)

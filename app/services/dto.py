@@ -6,8 +6,8 @@ These dataclasses hold exactly the data a screen needs, already loaded, so the G
 never deals with sessions (architecture rule) and can't modify data by accident.
 """
 
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime
 from decimal import Decimal
 
 
@@ -91,6 +91,8 @@ class OrderSummary:
     status: str
     total: Decimal
     item_count: int
+    customer_name: str | None = None   # filled in admin lists only
+    customer_email: str | None = None
 
 
 @dataclass(frozen=True)
@@ -152,3 +154,89 @@ class ProductSentiment:
     avg_rating: float | None
     avg_score: float | None
     badge: str | None  # "Positive" / "Mixed" / "Negative"; None without scored reviews
+
+
+# ---------------------------------------------------------------------------
+# Admin
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class AuditEntry:
+    id: int
+    created_at: datetime
+    user_id: int | None
+    user_name: str | None  # None if that user was deleted later
+    action: str
+    entity: str
+    entity_id: int | None
+    details: str | None
+
+
+@dataclass(frozen=True)
+class CustomerSummary:
+    id: int
+    name: str
+    email: str
+    joined_at: datetime
+    order_count: int        # all orders, including cancelled
+    total_spent: Decimal    # cancelled orders don't count
+    last_order_at: datetime | None
+    is_locked: bool         # locked out after too many failed logins
+
+
+@dataclass(frozen=True)
+class DailyRevenue:
+    day: date
+    order_count: int
+    revenue: Decimal
+
+
+@dataclass(frozen=True)
+class CategorySales:
+    category: str
+    order_count: int
+    units_sold: int
+    revenue: Decimal
+
+
+@dataclass(frozen=True)
+class ProductSales:
+    rank: int
+    product_id: int
+    product: str
+    category: str
+    units_sold: int
+    revenue: Decimal
+
+
+@dataclass(frozen=True)
+class Dashboard:
+    total_revenue: Decimal   # all non-cancelled orders
+    order_count: int         # all orders
+    customer_count: int
+    low_stock_count: int     # active products with fewer than 10 in stock
+    daily_revenue: list[DailyRevenue]   # one entry per day, oldest first, gaps = 0
+    sales_by_category: list[CategorySales]
+    top_products: list[ProductSales]
+
+
+@dataclass(frozen=True)
+class Report:
+    """A table of results the admin can view and export (CSV / PDF).
+
+    rows hold raw values (int, Decimal, str, datetime), not display text, so a CSV
+    opened in Excel gets real numbers. `kind` is the report's id, used in file names.
+    """
+    kind: str
+    title: str
+    start: date
+    end: date
+    columns: list[str]
+    rows: list[tuple]
+    totals: tuple | None = None   # optional last "Total" row, same length as columns
+    money_columns: frozenset = field(default_factory=frozenset)  # column indexes in ₹
+    note: str = ""                # extra explanation shown under the title
+
+    @property
+    def period(self) -> str:
+        return f"{self.start:%d %b %Y} to {self.end:%d %b %Y}"

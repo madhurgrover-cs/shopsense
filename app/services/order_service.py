@@ -16,6 +16,7 @@ from app.services.dto import (
     OrderDetail, OrderLine, OrderSummary, PaymentInfo, StatusChange,
 )
 from app.services.user_session import UserSession
+from app.services.validation import date_range, day_bounds
 
 # Which status can follow which. Delivered and cancelled are final.
 # A shipped parcel can't be cancelled from the shop side (it is already on its way).
@@ -138,12 +139,33 @@ def get_order_detail(user: UserSession, order_id: int) -> OrderDetail:
 # Admin
 # ---------------------------------------------------------------------------
 
-def list_all_orders(admin: UserSession, status: str | None = None) -> list[OrderSummary]:
+def list_all_orders(admin: UserSession, status: str | None = None,
+                    date_from=None, date_to=None) -> list[OrderSummary]:
+    """Every customer's orders, newest first, with the customer's name.
+
+    Optional filters: a status, and a date range (dates in IST, both days included;
+    date objects or "YYYY-MM-DD" text). Give both dates or neither.
+    """
     require_admin(admin)
     if status is not None and status not in ORDER_STATUSES:
         raise ValidationError("Unknown order status.")
+    created_from = created_before = None
+    if date_from is not None or date_to is not None:
+        if date_from is None or date_to is None:
+            raise ValidationError("Please give both a start and an end date.")
+        created_from, created_before = day_bounds(*date_range(date_from, date_to))
     with get_session() as session:
-        return [_to_summary(r) for r in order_repository.list_orders(session, status=status)]
+        rows = order_repository.list_orders(session, status=status, created_from=created_from,
+                                            created_before=created_before)
+        return [_to_summary(r) for r in rows]
+
+
+def next_statuses(status: str) -> list[str]:
+    """The statuses an order can move to from `status`, in flow order (for the admin
+    screen's buttons). update_order_status enforces the same rules."""
+    if status not in ALLOWED_TRANSITIONS:
+        raise ValidationError("Unknown order status.")
+    return [s for s in ORDER_STATUSES if s in ALLOWED_TRANSITIONS[status]]
 
 
 def update_order_status(admin: UserSession, order_id: int, new_status: str) -> OrderDetail:
@@ -205,7 +227,8 @@ def _collect_cash_on_delivery(session: Session, order: Order) -> None:
 
 def _to_summary(row) -> OrderSummary:
     o = row.Order
-    return OrderSummary(o.id, o.created_at, o.status, o.total, int(row.item_count))
+    return OrderSummary(o.id, o.created_at, o.status, o.total, int(row.item_count),
+                        row.customer_name, row.customer_email)
 
 
 def _build_detail(session: Session, order: Order) -> OrderDetail:

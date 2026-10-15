@@ -3,10 +3,11 @@
 import pytest
 
 from app.db import get_session
-from app.exceptions import PermissionDeniedError
+from app.exceptions import PermissionDeniedError, ValidationError
 from app.models import AuditLog
 from app.repositories import user_repository
 from app.services import audit_service
+from app.services.dto import AuditEntry
 from app.services.user_session import UserSession
 
 
@@ -70,6 +71,15 @@ def test_list_recent_newest_first(db_session, admin):
             )
     recent = audit_service.list_recent(admin, limit=3)
     assert [e.entity_id for e in recent] == [3, 2, 1]
+    assert all(isinstance(e, AuditEntry) for e in recent)  # plain DTOs for the GUI
+    assert {e.user_name for e in recent} == {admin.name}
+    assert recent[0].action == "create" and recent[0].entity == "coupon"
+
+
+def test_list_recent_limit_is_checked(db_session, admin):
+    for bad in (0, 1001, "5"):
+        with pytest.raises(ValidationError):
+            audit_service.list_recent(admin, limit=bad)
 
 
 def test_list_recent_is_admin_only(db_session):

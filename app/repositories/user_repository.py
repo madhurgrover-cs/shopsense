@@ -1,10 +1,10 @@
 """All database queries for users. Functions take the caller's session; they never
 commit. The service that calls them owns the transaction."""
 
-from sqlalchemy import select
+from sqlalchemy import Row, case, func, select
 from sqlalchemy.orm import Session
 
-from app.models import User
+from app.models import Order, User
 
 
 def get_by_id(session: Session, user_id: int) -> User | None:
@@ -30,3 +30,22 @@ def create(session: Session, name: str, email: str, password_hash: str,
     session.add(user)
     session.flush()  # sends the INSERT now, so user.id is set and unique errors surface here
     return user
+
+
+def list_customers_with_stats(session: Session) -> list[Row]:
+    """(User, order_count, total_spent, last_order_at) for every customer, by name.
+
+    LEFT JOIN so customers without orders are listed too (count 0, spent 0). Cancelled
+    orders count as orders but not as money spent (it was refunded).
+    """
+    spent = func.coalesce(
+        func.sum(case((Order.status != "cancelled", Order.total), else_=0)), 0)
+    stmt = (
+        select(User, func.count(Order.id).label("order_count"), spent.label("total_spent"),
+               func.max(Order.created_at).label("last_order_at"))
+        .outerjoin(Order, Order.user_id == User.id)
+        .where(User.role == "customer")
+        .group_by(User.id)
+        .order_by(User.name, User.id)
+    )
+    return list(session.execute(stmt))

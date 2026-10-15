@@ -16,15 +16,18 @@ something happened that didn't (or miss something that did).
 from sqlalchemy.orm import Session
 
 from app.db import get_session
+from app.exceptions import ValidationError
 from app.models import AuditLog
 from app.repositories import audit_repository
 from app.services.auth_service import require_admin
+from app.services.dto import AuditEntry
 from app.services.user_session import UserSession
 
 # Actions
 CREATE = "create"
 UPDATE = "update"
 DELETE = "delete"            # products: soft delete (is_active = false)
+RESTORE = "restore"          # products: undo a soft delete
 STATUS_CHANGE = "status_change"
 
 # Entities
@@ -42,8 +45,16 @@ def record_admin_action(session: Session, actor: UserSession, action: str, entit
     return audit_repository.add(session, actor.user_id, action, entity, entity_id, details)
 
 
-def list_recent(actor: UserSession, limit: int = 100) -> list[AuditLog]:
-    """Most recent audit entries, newest first (admin only)."""
+MAX_ENTRIES = 1000
+
+
+def list_recent(actor: UserSession, limit: int = 100) -> list[AuditEntry]:
+    """Most recent audit entries with the admin's name, newest first (admin only)."""
     require_admin(actor)
+    if not isinstance(limit, int) or not 1 <= limit <= MAX_ENTRIES:
+        raise ValidationError(f"Limit must be between 1 and {MAX_ENTRIES}.")
     with get_session() as session:
-        return audit_repository.list_recent(session, limit)
+        return [AuditEntry(r.AuditLog.id, r.AuditLog.created_at, r.AuditLog.user_id,
+                           r.user_name, r.AuditLog.action, r.AuditLog.entity,
+                           r.AuditLog.entity_id, r.AuditLog.details)
+                for r in audit_repository.list_recent(session, limit)]
