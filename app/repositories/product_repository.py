@@ -34,6 +34,7 @@ def _product_rows_query():
             func.coalesce(Inventory.stock, 0).label("stock"),
             func.avg(Review.rating).label("avg_rating"),
             func.count(Review.id).label("review_count"),
+            func.avg(Review.sentiment_score).label("avg_sentiment"),
         )
         .join(Category, Category.id == Product.category_id)
         .outerjoin(Inventory, Inventory.product_id == Product.id)

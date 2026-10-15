@@ -198,3 +198,27 @@ def test_backfill_all_rescores_and_reports_changes(factory, db_session):
     assert scored == total_reviews and changed == 1  # only the stale one changes
     db_session.expire_all()
     assert db_session.get(Review, stale).sentiment_score > 0.5
+
+
+# ---------------------------------------------------------------------------
+# reviewable_products (order screen)
+# ---------------------------------------------------------------------------
+
+def test_reviewable_products_in_delivered_order(factory, customer):
+    a, b, c = factory.product(), factory.product(), factory.product()
+    order = factory.order(customer.user_id, [a, b, c], status="delivered")
+    factory.review(customer.user_id, b, 5, "Already reviewed")
+    assert review_service.reviewable_products(customer, order) == {a, c}
+
+    review_service.add_review(customer, a, 4, "Nice")
+    assert review_service.reviewable_products(customer, order) == {c}
+
+
+def test_reviewable_products_empty_for_undelivered_or_foreign_orders(factory, customer):
+    pid = factory.product()
+    shipped = factory.order(customer.user_id, [pid], status="shipped")
+    someone_elses = factory.order(factory.user().user_id, [pid], status="delivered")
+    assert review_service.reviewable_products(customer, shipped) == set()
+    assert review_service.reviewable_products(customer, someone_elses) == set()
+    with pytest.raises(PermissionDeniedError):
+        review_service.reviewable_products(None, shipped)

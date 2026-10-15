@@ -24,6 +24,15 @@ def can_review(user: UserSession, product_id: int) -> bool:
         )
 
 
+def reviewable_products(user: UserSession, order_id: int) -> set[int]:
+    """Products in one of the user's orders that can be reviewed now (order delivered,
+    not reviewed yet). One call for the whole order, so the order screen can show a
+    "Write review" button per item without a query per item."""
+    require_login(user)
+    with get_session() as session:
+        return set(review_repository.reviewable_in_order(session, user.user_id, order_id))
+
+
 def add_review(user: UserSession, product_id: int, rating: int,
                comment: str | None = None) -> ReviewInfo:
     """Add a review. Only for a product the user received (a DELIVERED order), and

@@ -170,6 +170,32 @@ def no_seed_embeddings(db_session):
     db_session.commit()
 
 
+@pytest.fixture(scope="session")
+def gui_app():
+    """ONE hidden ShopSense window for every GUI test in the whole run.
+
+    On Windows with Python 3.14, creating a second Tk interpreter after the first one
+    was destroyed intermittently fails ("Can't find a usable init.tcl / ttk.tcl"). So
+    all GUI tests share this single window, created on first use and destroyed at the
+    very end. Network-touching and popup functions are replaced: popups are recorded in
+    app.popups (their titles) instead of opening windows.
+    """
+    from app.gui import app as app_module  # imported here: only GUI tests need Tk
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(app_module.system_service, "check_connection", lambda: None)
+    popups: list[str] = []
+    patch.setattr(app_module, "show_error", lambda parent, title, message: popups.append(title))
+    patch.setattr(app_module, "MessageDialog",
+                  lambda parent, title, message, kind="info": popups.append(title))
+    window = app_module.ShopSenseApp()
+    window.withdraw()
+    window.popups = popups
+    yield window
+    window._on_close()
+    patch.undo()
+
+
 @pytest.fixture(autouse=True)
 def fast_bcrypt(monkeypatch):
     """bcrypt at cost 12 takes ~0.25 s per hash; cost 4 is plenty for tests."""

@@ -220,3 +220,17 @@ def test_update_stock_errors(factory, admin, customer):
     with pytest.raises(PermissionDeniedError):
         catalog_service.update_stock(customer, pid, 5)
     assert factory.stock(pid) == 10
+
+
+def test_products_carry_sentiment_badge(factory):
+    cat = factory.category()
+    liked, disliked, unreviewed = (factory.product(category_id=cat, name=f"Test {n}")
+                                   for n in ("A Liked", "B Disliked", "C Unreviewed"))
+    a, b = factory.user().user_id, factory.user().user_id
+    factory.review(a, liked, 5, "Love it", score=0.9)
+    factory.review(b, liked, 4, "Good", score=0.6)
+    factory.review(a, disliked, 1, "Broken", score=-0.8)
+
+    badges = {p.id: p.sentiment_badge for p in catalog_service.browse_products(cat)}
+    assert badges == {liked: "Positive", disliked: "Negative", unreviewed: None}
+    assert catalog_service.get_product_detail(liked).sentiment_badge == "Positive"

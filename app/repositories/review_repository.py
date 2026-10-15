@@ -17,6 +17,21 @@ def has_received_product(session: Session, user_id: int, product_id: int) -> boo
     return session.scalar(stmt)
 
 
+def reviewable_in_order(session: Session, user_id: int, order_id: int) -> list[int]:
+    """Product ids in this user's DELIVERED order that the user hasn't reviewed yet."""
+    already_reviewed = exists().where(
+        Review.user_id == user_id, Review.product_id == OrderItem.product_id
+    )
+    stmt = (
+        select(OrderItem.product_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(OrderItem.order_id == order_id, Order.user_id == user_id,
+               Order.status == "delivered", ~already_reviewed)
+        .order_by(OrderItem.id)
+    )
+    return list(session.scalars(stmt))
+
+
 def get_by_user_and_product(session: Session, user_id: int, product_id: int) -> Review | None:
     return session.scalars(
         select(Review).where(Review.user_id == user_id, Review.product_id == product_id)

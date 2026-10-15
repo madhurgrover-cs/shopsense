@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import Row
 
-from app.ai import recommend, search
+from app.ai import recommend, search, sentiment
 from app.db import get_session
 from app.exceptions import NotFoundError, ValidationError
 from app.repositories import product_repository
@@ -243,13 +243,20 @@ def _avg(value) -> float | None:
     return None if value is None else round(float(value), 2)
 
 
-def _to_summary(row: Row) -> ProductSummary:
+def _summary_fields(row: Row) -> dict:
     p = row.Product
-    return ProductSummary(p.id, p.name, p.category_id, row.category, p.price, row.stock,
-                          _avg(row.avg_rating), row.review_count, p.is_active)
+    avg_sentiment = None if row.avg_sentiment is None else float(row.avg_sentiment)
+    return dict(id=p.id, name=p.name, category_id=p.category_id, category=row.category,
+                price=p.price, stock=row.stock, avg_rating=_avg(row.avg_rating),
+                review_count=row.review_count, is_active=p.is_active,
+                # The badge comes from the same query (avg of review scores), so a page
+                # of product cards needs no extra call per product.
+                sentiment_badge=sentiment.badge(avg_sentiment))
+
+
+def _to_summary(row: Row) -> ProductSummary:
+    return ProductSummary(**_summary_fields(row))
 
 
 def _to_detail(row: Row) -> ProductDetail:
-    p = row.Product
-    return ProductDetail(p.id, p.name, p.category_id, row.category, p.price, row.stock,
-                         _avg(row.avg_rating), row.review_count, p.is_active, p.description)
+    return ProductDetail(**_summary_fields(row), description=row.Product.description)

@@ -29,6 +29,7 @@ class ProductSummary:
     avg_rating: float | None  # None when there are no reviews yet
     review_count: int
     is_active: bool
+    sentiment_badge: str | None = None  # "Positive" / "Mixed" / "Negative" from reviews
 
     @property
     def in_stock(self) -> bool:
@@ -37,7 +38,7 @@ class ProductSummary:
 
 @dataclass(frozen=True)
 class ProductDetail(ProductSummary):
-    description: str
+    description: str = ""
 
 
 @dataclass(frozen=True)
