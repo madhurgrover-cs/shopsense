@@ -29,12 +29,14 @@ UPDATE = "update"
 DELETE = "delete"            # products: soft delete (is_active = false)
 RESTORE = "restore"          # products: undo a soft delete
 STATUS_CHANGE = "status_change"
+ASK = "ask"                  # a question on the Ask your data screen
 
 # Entities
 PRODUCT = "product"
 ORDER = "order"
 COUPON = "coupon"
 STOCK = "stock"
+DATA = "data"                # Ask your data (details: the question and its outcome)
 
 
 def record_admin_action(session: Session, actor: UserSession, action: str, entity: str,

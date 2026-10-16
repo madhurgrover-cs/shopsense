@@ -236,6 +236,23 @@ class Dashboard:
 
 
 @dataclass(frozen=True)
+class DataAnswer:
+    """The answer to an "Ask your data" question."""
+    question: str
+    sql: str                 # the query that ran (checked and normalised by sql_guard)
+    columns: list[str]
+    rows: list[tuple]        # raw values, at most ask_data_service.MAX_ROWS
+    cut_off: bool            # True if there were more rows than MAX_ROWS
+    summary: str             # one plain-English sentence
+
+    @property
+    def row_count_text(self) -> str:
+        if self.cut_off:
+            return f"First {len(self.rows)} rows shown (there are more)"
+        return f"{len(self.rows)} row{'' if len(self.rows) == 1 else 's'}"
+
+
+@dataclass(frozen=True)
 class Report:
     """A table of results the admin can view and export (CSV / PDF).
 

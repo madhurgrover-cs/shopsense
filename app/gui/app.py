@@ -25,6 +25,7 @@ from tkinter import filedialog
 import customtkinter as ctk
 
 from app.gui import theme
+from app.gui.screens.admin.ask_data import AskDataScreen
 from app.gui.screens.admin.audit import AuditLogScreen
 from app.gui.screens.admin.coupons import CouponsScreen
 from app.gui.screens.admin.dashboard import DashboardScreen
@@ -65,6 +66,7 @@ ADMIN_SCREENS = [
     ("admin_coupons", "Coupons", CouponsScreen),
     ("admin_reviews", "Flagged reviews", FlaggedReviewsScreen),
     ("admin_reports", "Reports", ReportsScreen),
+    ("admin_ask", "Ask your data", AskDataScreen),
     ("admin_users", "Customers", CustomersScreen),
     ("admin_audit", "Audit log", AuditLogScreen),
 ]

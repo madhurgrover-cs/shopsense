@@ -40,3 +40,13 @@ def _normalise_db_url(url: str) -> str:
 
 DATABASE_URL: str = _normalise_db_url(_require("DATABASE_URL"))
 SQL_ECHO: bool = os.getenv("SQL_ECHO", "0") == "1"
+
+# "Ask your data" (admin screen) sends questions to Google Gemini. The key is optional:
+# without it the app works normally and that one screen explains how to add it.
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "").strip()
+# Current models available on the free tier. Change them in .env if Google retires one
+# (the screen then says the model isn't available). The free tier is sometimes
+# overloaded ("503 high demand"); the request is then sent to the fallback model.
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "").strip() or "gemini-3.5-flash"
+GEMINI_FALLBACK_MODEL: str = (os.getenv("GEMINI_FALLBACK_MODEL", "").strip()
+                              or "gemini-3.5-flash-lite")

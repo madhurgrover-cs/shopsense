@@ -10,8 +10,9 @@ from dataclasses import dataclass
 from sqlalchemy.exc import DBAPIError, OperationalError
 
 from app.exceptions import (
-    AccountLockedError, EmptyCartError, InvalidCouponError, InvalidCredentialsError,
-    NotFoundError, OutOfStockError, PermissionDeniedError, ShopSenseError, ValidationError,
+    AccountLockedError, AskDataError, EmptyCartError, InvalidCouponError,
+    InvalidCredentialsError, NotFoundError, OutOfStockError, PermissionDeniedError,
+    ShopSenseError, SqlRejectedError, ValidationError,
 )
 
 log = logging.getLogger(__name__)
@@ -25,6 +26,8 @@ _TITLES: list[tuple[type[ShopSenseError], str]] = [
     (PermissionDeniedError, "Not allowed"),
     (NotFoundError, "Not found"),
     (ValidationError, "Please check your input"),
+    (SqlRejectedError, "Query blocked"),  # before AskDataError: it's a subclass
+    (AskDataError, "Couldn't answer"),
 ]
 
 

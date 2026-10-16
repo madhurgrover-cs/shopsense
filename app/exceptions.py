@@ -67,3 +67,16 @@ class InvalidCouponError(ShopSenseError):
 class EmptyCartError(ShopSenseError):
     def __init__(self) -> None:
         super().__init__("Your cart is empty.")
+
+
+class AskDataError(ShopSenseError):
+    """"Ask your data" couldn't answer: no API key, offline, the AI failed, or the query
+    failed. `sql` is the query involved, if one was generated, so the screen can show it."""
+
+    def __init__(self, message: str, sql: str | None = None) -> None:
+        self.sql = sql
+        super().__init__(message)
+
+
+class SqlRejectedError(AskDataError):
+    """The AI's SQL failed a safety check (see app/ai/sql_guard.py) and was NOT run."""

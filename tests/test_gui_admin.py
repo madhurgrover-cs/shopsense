@@ -8,19 +8,19 @@ from decimal import Decimal
 
 import pytest
 
-from app.exceptions import ValidationError
+from app.exceptions import SqlRejectedError, ValidationError
 from app.gui.screens.admin import coupons as coupons_screen
 from app.gui.screens.admin import products as products_screen
 from app.gui.widgets.charts import compact_inr
 from app.gui.widgets.dialogs import FormDialog
 from app.gui.widgets.table import Column, DataTable
 from app.services import (
-    audit_service, catalog_service, coupon_service, order_service, report_service,
-    review_service, user_service,
+    ask_data_service, audit_service, catalog_service, coupon_service, order_service,
+    report_service, review_service, user_service,
 )
 from app.services.dto import (
     AuditEntry, CategoryInfo, CategorySales, CouponInfo, CustomerSummary, Dashboard,
-    DailyRevenue, OrderDetail, OrderLine, OrderSummary, PaymentInfo, ProductDetail,
+    DailyRevenue, DataAnswer, OrderDetail, OrderLine, OrderSummary, PaymentInfo, ProductDetail,
     ProductSales, ProductSummary, Report, ReviewInfo, StatusChange, StockForecast,
 )
 from tests.test_gui_smoke import ADMIN, login_as, pump, texts
@@ -163,7 +163,7 @@ def test_admin_gets_admin_screens_and_dashboard(admin_window):
     assert w._current == "admin_dashboard"
     assert list(w._screens) == ["admin_dashboard", "admin_products", "admin_orders",
                                 "admin_coupons", "admin_reviews", "admin_reports",
-                                "admin_users", "admin_audit"]
+                                "admin_ask", "admin_users", "admin_audit"]
     assert w._ai_status.cget("text") == ""  # admins don't preload the search model
     dashboard = w._screens["admin_dashboard"]
     assert dashboard.kpis["revenue"].value.cget("text") == "₹123,456.50"
@@ -482,6 +482,62 @@ def test_audit_log(admin_window):
     screen._entity.set("Stock")
     screen._filter()
     assert [e.id for e in screen.table.items] == [1]
+
+
+def test_ask_data_shows_answer_table_and_collapsible_sql(admin_window, monkeypatch):
+    asked = []
+    answer = DataAnswer("Top categories?", "SELECT category, revenue\nFROM v_sales_by_category",
+                        ["category", "revenue"],
+                        [("Home", Decimal("5000.00")), ("Gadgets", Decimal("900.00"))],
+                        False, "Home made the most revenue.")
+    monkeypatch.setattr(ask_data_service, "ask",
+                        lambda admin, q: asked.append((admin, q)) or answer)
+    screen = show(admin_window, "admin_ask")
+    screen._question.insert(0, "Top categories?")
+    screen.ask()
+    pump(admin_window)
+
+    assert asked == [(ADMIN, "Top categories?")]
+    assert screen._summary.cget("text") == "Home made the most revenue."
+    assert "2 rows" in screen._meta.cget("text")
+    assert screen.table.tree.item("0")["values"] == ["Home", "5,000.00"]
+    assert screen._sql.get("1.0", "end").strip() == answer.sql
+    assert not screen._sql_open                      # SQL starts collapsed
+    assert screen._sql_toggle.cget("text") == "Show SQL ▸"
+    screen.toggle_sql()
+    assert screen._sql_open and screen._sql.winfo_manager() == "pack"
+    assert screen._sql_toggle.cget("text") == "Hide SQL ▾"
+    screen.toggle_sql()
+    assert screen._sql.winfo_manager() == ""
+
+
+def test_ask_data_shows_blocked_query_inline(admin_window, monkeypatch):
+    def blocked(admin, question):
+        raise SqlRejectedError("The generated query was blocked: 'password_hash' is "
+                               "private and can't be queried.",
+                               sql="SELECT password_hash FROM users")
+    monkeypatch.setattr(ask_data_service, "ask", blocked)
+    popups_before = len(admin_window.popups)
+    screen = show(admin_window, "admin_ask")
+    assert [b.cget("text") for b in screen._examples] == ask_data_service.EXAMPLE_QUESTIONS
+    screen._examples[0].invoke()                       # click the first example button
+    assert screen._question.get() == ask_data_service.EXAMPLE_QUESTIONS[0]
+    pump(admin_window)
+
+    assert screen._summary.cget("text").startswith("Query blocked: ")
+    assert screen._sql.get("1.0", "end").strip() == "SELECT password_hash FROM users"
+    assert screen.table is None
+    assert len(admin_window.popups) == popups_before  # shown on the screen, not a popup
+    assert screen._ask.cget("state") == "normal"      # ready for the next question
+    assert screen._examples[0].cget("state") == "normal"
+
+
+def test_ask_data_needs_a_question(admin_window, monkeypatch):
+    monkeypatch.setattr(ask_data_service, "ask", lambda *a: pytest.fail("must not be called"))
+    screen = show(admin_window, "admin_ask")
+    screen._question.delete(0, "end")
+    screen.ask()
+    assert screen._summary.cget("text") == "Type a question first."
 
 
 # ---------------------------------------------------------------------------

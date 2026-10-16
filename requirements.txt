@@ -18,6 +18,8 @@ sentence-transformers>=3.0
 transformers>=4.40        # DistilBERT review sentiment (also used by sentence-transformers)
 vaderSentiment>=3.3
 rapidfuzz>=3.9            # spelling correction for search ("sirt" -> "shirt")
+google-genai>=1.0         # Gemini API: "Ask your data" (question -> SQL)
+sqlglot>=26.0             # parses that SQL so only safe SELECTs are run
 
 # --- Dev ---
 Faker>=25.0

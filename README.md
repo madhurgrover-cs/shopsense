@@ -37,7 +37,11 @@ Requires **Python 3.11+** (developed on 3.14).
    your Neon connection string. The plain `postgresql://...` URL from the Neon dashboard
    works; `app/config.py` switches it to the psycopg 3 driver. **Never commit `.env`.**
 
-5. **Create the schema** (tables, pgvector extension, trigger, views):
+   Optional: set `GEMINI_API_KEY` (free key from aistudio.google.com) to enable the
+   admin **Ask your data** screen. Without it, only that screen is unavailable.
+
+5. **Create the schema** (tables, pgvector extension, trigger, views, and the
+   `shopsense_readonly` role that Ask your data's queries run as):
 
    ```powershell
    alembic upgrade head
