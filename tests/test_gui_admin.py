@@ -21,7 +21,7 @@ from app.services import (
 from app.services.dto import (
     AuditEntry, CategoryInfo, CategorySales, CouponInfo, CustomerSummary, Dashboard,
     DailyRevenue, OrderDetail, OrderLine, OrderSummary, PaymentInfo, ProductDetail,
-    ProductSales, ProductSummary, Report, ReviewInfo, StatusChange,
+    ProductSales, ProductSummary, Report, ReviewInfo, StatusChange, StockForecast,
 )
 from tests.test_gui_smoke import ADMIN, login_as, pump, texts
 
@@ -29,6 +29,8 @@ NOW = datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc)
 LAMP = ProductSummary(1, "Test Desk Lamp", 1, "Home", Decimal("999.00"), 40, 4.0, 3, True)
 MUG = ProductSummary(2, "Test Coffee Mug", 1, "Home", Decimal("299.00"), 4, None, 0, True)
 OLD = ProductSummary(3, "Test Old Radio", 2, "Gadgets", Decimal("1500.00"), 0, None, 0, False)
+MUG_FORECAST = StockForecast(2, "Test Coffee Mug", "Home", 4, 2.0, 2.0, date(2026, 10, 18), 56)
+LAMP_FORECAST = StockForecast(1, "Test Desk Lamp", "Home", 40, 1.5, 26.7, date(2026, 11, 12), 5)
 PLACED = OrderSummary(41, NOW, "placed", Decimal("999.00"), 1, "Tara Dhar", "tara@example.com")
 DONE = OrderSummary(42, NOW, "delivered", Decimal("299.00"), 1, "Ravi Iyer", "ravi@example.com")
 REPORT = Report("sales_by_category", "Sales by category", date(2026, 10, 1), date(2026, 10, 7),
@@ -68,7 +70,9 @@ def calls(monkeypatch):
         [DailyRevenue(date(2026, 10, d), 2, Decimal(d * 100)) for d in range(1, 31)],
         [CategorySales("Home", 10, 12, Decimal("5000")),
          CategorySales("Gadgets", 3, 3, Decimal("900"))],
-        [ProductSales(1, 1, "Test Desk Lamp", "Home", 5, Decimal("4995"))]))
+        [ProductSales(1, 1, "Test Desk Lamp", "Home", 5, Decimal("4995"))],
+        run_out_soon_count=3, running_out_soon=[MUG_FORECAST, LAMP_FORECAST]))
+    s(report_service, "stock_forecasts", lambda admin: [MUG_FORECAST, LAMP_FORECAST])
     # Products
     s(catalog_service, "list_categories",
       lambda: [CategoryInfo(1, "Home", 2), CategoryInfo(2, "Gadgets", 0)])
@@ -171,6 +175,28 @@ def test_admin_gets_admin_screens_and_dashboard(admin_window):
     assert len(dashboard.trend.figure.axes[0].lines[0].get_xdata()) == 30
 
 
+def test_dashboard_stock_out_forecast(admin_window):
+    dashboard = admin_window._screens["admin_dashboard"]
+    assert dashboard.kpis["low_stock"].note.cget("text") == "3 will run out within 14 days"
+    rows = texts(dashboard.running_out)
+    assert rows[0] == "Running out soon"
+    assert rows[1:] == ["Test Coffee Mug", "2 days", "runs out 18 Oct 2026",
+                        "Test Desk Lamp", "26 days", "runs out 12 Nov 2026"]
+
+
+def test_dashboard_running_out_list_when_nothing_sells(admin_window):
+    dashboard = admin_window._screens["admin_dashboard"]
+    dashboard._render_running_out([])
+    assert texts(dashboard.running_out) == ["Running out soon",
+                                            "No product has sold recently enough to forecast."]
+
+
+def test_days_left_formatting():
+    from app.gui import formatting as fmt
+    assert [fmt.days_left(d) for d in (None, 0, 0.9, 1.0, 1.9, 26.7)] == [
+        "-", "< 1 day", "< 1 day", "1 day", "1 day", "26 days"]
+
+
 def test_customer_screens_are_gone_for_admin(admin_window):
     assert "shop" not in admin_window._screens and "cart" not in admin_window._screens
 
@@ -197,6 +223,17 @@ def test_products_table_and_filters(admin_window):
         screen._show.set(show_value)
         screen._filter()
         assert [p.id for p in screen.table.items] == expected, show_value
+
+
+def test_products_days_left_column_sorts_most_urgent_first(admin_window):
+    screen = show(admin_window, "admin_products")
+    days_column = [c.title for c in screen.table._columns].index("Days left")
+    assert screen.table.tree.item(str(MUG.id))["values"][days_column] == "2 days"
+    assert screen.table.tree.item(str(OLD.id))["values"][days_column] == "-"  # no forecast
+    screen.table.sort_by(days_column)
+    assert [p.id for p in screen.table.items] == [MUG.id, LAMP.id, OLD.id]  # "-" last
+    screen.table.sort_by(days_column)
+    assert [p.id for p in screen.table.items] == [LAMP.id, MUG.id, OLD.id]  # still last
 
 
 def test_low_stock_card_opens_filtered_products(admin_window):

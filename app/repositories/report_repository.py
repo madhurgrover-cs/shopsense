@@ -17,7 +17,7 @@ from decimal import Decimal
 from sqlalchemy import Row, column, func, select, table
 from sqlalchemy.orm import Session
 
-from app.models import Category, Order, OrderItem, Payment, Product, User
+from app.models import Category, Inventory, Order, OrderItem, Payment, Product, User
 
 # The views, described just enough for SQLAlchemy to query them (they have no ORM
 # models: they are read-only results, not tables we insert into).
@@ -151,4 +151,34 @@ def orders_between(session: Session, start: datetime, before: datetime) -> list[
 def low_stock_products(session: Session) -> list[Row]:
     """(product_id, product, category, stock) from v_low_stock, lowest stock first."""
     stmt = select(v_low_stock).order_by(v_low_stock.c.stock, v_low_stock.c.product)
+    return list(session.execute(stmt))
+
+
+# ---------------------------------------------------------------------------
+# Stock-out forecast
+# ---------------------------------------------------------------------------
+
+def daily_units_sold(session: Session, start: datetime, before: datetime) -> list[Row]:
+    """(product_id, day, units) for non-cancelled orders placed in [start, before).
+    `day` is the India calendar day, like v_daily_revenue."""
+    day = func.date(func.timezone("Asia/Kolkata", Order.created_at)).label("day")
+    stmt = (
+        select(OrderItem.product_id, day, func.sum(OrderItem.qty).label("units"))
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(NOT_CANCELLED, Order.created_at >= start, Order.created_at < before)
+        .group_by(OrderItem.product_id, day)
+    )
+    return list(session.execute(stmt))
+
+
+def active_products_with_stock(session: Session) -> list[Row]:
+    """(product_id, product, category, stock) of every active product."""
+    stmt = (
+        select(Product.id.label("product_id"), Product.name.label("product"),
+               Category.name.label("category"),
+               func.coalesce(Inventory.stock, 0).label("stock"))
+        .join(Category, Category.id == Product.category_id)
+        .outerjoin(Inventory, Inventory.product_id == Product.id)
+        .where(Product.is_active)
+    )
     return list(session.execute(stmt))

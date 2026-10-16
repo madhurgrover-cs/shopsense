@@ -210,6 +210,19 @@ class ProductSales:
 
 
 @dataclass(frozen=True)
+class StockForecast:
+    """When a product is expected to run out (see app/ai/forecast.py)."""
+    product_id: int
+    product: str
+    category: str
+    stock: int
+    velocity: float          # expected units sold per day (recent days weigh more)
+    days_left: float         # stock / velocity
+    run_out_date: date
+    reorder_qty: int         # units to order to cover the next 30 days
+
+
+@dataclass(frozen=True)
 class Dashboard:
     total_revenue: Decimal   # all non-cancelled orders
     order_count: int         # all orders
@@ -218,6 +231,8 @@ class Dashboard:
     daily_revenue: list[DailyRevenue]   # one entry per day, oldest first, gaps = 0
     sales_by_category: list[CategorySales]
     top_products: list[ProductSales]
+    run_out_soon_count: int = 0          # products expected to run out within 14 days
+    running_out_soon: list[StockForecast] = field(default_factory=list)  # most urgent 5
 
 
 @dataclass(frozen=True)

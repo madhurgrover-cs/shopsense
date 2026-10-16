@@ -12,8 +12,8 @@ from app.gui.theme import PAD_L, PAD_S, PAD_XL
 from app.gui.widgets.common import muted
 from app.gui.widgets.dialogs import Field, FormDialog
 from app.gui.widgets.table import Column, DataTable
-from app.services import catalog_service
-from app.services.dto import ProductDetail, ProductSummary
+from app.services import catalog_service, report_service
+from app.services.dto import ProductDetail, ProductSummary, StockForecast
 
 LOW_STOCK = 10  # same rule as the v_low_stock view
 ALL_CATEGORIES = "All categories"
@@ -51,6 +51,7 @@ class ProductsScreen(Screen):
     def __init__(self, parent, app) -> None:
         super().__init__(parent, app)
         self._products: list[ProductSummary] = []
+        self._forecasts: dict[int, StockForecast] = {}  # product id -> stock-out forecast
         self._categories: dict[str, int] = {}  # name -> id
 
         bar = toolbar(self)
@@ -79,6 +80,8 @@ class ProductsScreen(Screen):
             Column("Price", 110, lambda p: fmt.inr(p.price), sort=lambda p: p.price, anchor="e"),
             Column("Stock", 80, lambda p: p.stock, sort=lambda p: p.stock, anchor="e"),
             Column("Status", 110, product_status),
+            Column("Days left", 90, lambda p: fmt.days_left(self._days_left(p)),
+                   sort=self._days_left, anchor="center"),
             Column("Rating", 100, lambda p: fmt.rating(p.avg_rating, p.review_count)
                    if p.review_count else "-", sort=lambda p: p.avg_rating),
         ], on_select=lambda _p: self._update_buttons(), on_open=lambda _p: self._edit_selected(),
@@ -105,15 +108,25 @@ class ProductsScreen(Screen):
                            message="Loading categories...")
         self._reload()
 
+    def _days_left(self, product: ProductSummary) -> float | None:
+        forecast = self._forecasts.get(product.id)
+        return forecast.days_left if forecast else None
+
     def _reload(self, select_id: int | None = None) -> None:
-        def loaded(products) -> None:
+        def load():
+            # Background thread: the products and their stock-out forecasts together.
+            return (catalog_service.list_all_products(self.app.user),
+                    report_service.stock_forecasts(self.app.user))
+
+        def loaded(result) -> None:
+            products, forecasts = result
+            self._forecasts = {f.product_id: f for f in forecasts}
             self._products = products
             self._filter()
             if select_id is not None:
                 self.table.select(select_id)
             self._update_buttons()
-        self.app.tasks.run(catalog_service.list_all_products, self.app.user,
-                           on_success=loaded, message="Loading products...")
+        self.app.tasks.run(load, on_success=loaded, message="Loading products...")
 
     def _set_categories(self, categories) -> None:
         self._categories = {c.name: c.id for c in categories}

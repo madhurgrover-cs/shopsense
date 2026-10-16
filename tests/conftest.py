@@ -103,15 +103,16 @@ class Factory:
                                  comment=comment, sentiment_score=score)).id
 
     def order(self, user_id: int, product_ids: list[int], status: str = "delivered",
-              unit_price: str = "1.00", created_at: datetime | None = None) -> int:
-        """An order (one of each product at unit_price) inserted directly, already in
+              unit_price: str = "1.00", created_at: datetime | None = None,
+              qty: int = 1) -> int:
+        """An order (qty of each product at unit_price) inserted directly, already in
         `status`, placed now or at created_at."""
         price = Decimal(unit_price)
-        total = price * len(product_ids)
+        total = price * qty * len(product_ids)
         order = Order(user_id=user_id, status=status, subtotal=total, discount=0, total=total)
         if created_at is not None:
             order.created_at = created_at
-        order.items = [OrderItem(product_id=pid, qty=1, unit_price=price)
+        order.items = [OrderItem(product_id=pid, qty=qty, unit_price=price)
                        for pid in product_ids]
         return self._save(order).id
 

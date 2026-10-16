@@ -12,7 +12,7 @@ from app.gui.screens.admin.common import button, toolbar
 from app.gui.screens.base import Screen
 from app.gui.theme import COLORS, PAD_L, PAD_M, PAD_S
 from app.gui.widgets import charts
-from app.gui.widgets.common import card, label, make_clickable, muted
+from app.gui.widgets.common import card, clear, label, make_clickable, muted
 from app.services import report_service
 from app.services.dto import Dashboard
 
@@ -56,7 +56,6 @@ class DashboardScreen(Screen):
         # The low-stock card opens the product list filtered to those products.
         make_clickable(self.kpis["low_stock"],
                        lambda: self.app.navigate("admin_products", show="Low stock"))
-        self.kpis["low_stock"].note.configure(text="Fewer than 10 left · click to view")
 
         self.trend = charts.ChartCard(body, "Revenue, last 30 days", height=230)
         self.trend.grid(row=1, column=0, columnspan=4, sticky="nsew", padx=PAD_S, pady=PAD_S)
@@ -65,6 +64,12 @@ class DashboardScreen(Screen):
                              pady=PAD_S)
         self.top = charts.ChartCard(body, "Top 5 products by revenue (all time)", height=250)
         self.top.grid(row=2, column=2, columnspan=2, sticky="nsew", padx=PAD_S, pady=PAD_S)
+
+        # "Running out soon": the 5 products the stock-out forecast says run out first.
+        self.running_out = card(body)
+        self.running_out.grid(row=3, column=0, columnspan=4, sticky="nsew", padx=PAD_S,
+                              pady=PAD_S)
+        self.running_out.grid_columnconfigure(0, weight=1)
         self.dashboard: Dashboard | None = None
 
     def on_show(self, **kwargs) -> None:
@@ -84,6 +89,9 @@ class DashboardScreen(Screen):
         k["low_stock"].value.configure(
             text=str(data.low_stock_count),
             text_color=COLORS["warning"] if data.low_stock_count else COLORS["text"])
+        k["low_stock"].note.configure(
+            text=f"{data.run_out_soon_count} will run out within 14 days")
+        self._render_running_out(data.running_out_soon)
 
         days = [d.day for d in data.daily_revenue]
         self.trend.draw(charts.revenue_trend(days, [d.revenue for d in data.daily_revenue]))
@@ -93,3 +101,22 @@ class DashboardScreen(Screen):
         self.top.draw(charts.horizontal_bars(
             [p.product for p in data.top_products], [p.revenue for p in data.top_products]))
         self._updated.configure(text=f"Updated {fmt.when(fmt.now())}")
+
+    def _render_running_out(self, forecasts) -> None:
+        """Compact list: product, days left, run-out date (most urgent first)."""
+        box = self.running_out
+        clear(box)
+        label(box, "Running out soon", size=16, weight="bold").grid(
+            row=0, column=0, columnspan=3, sticky="w", padx=PAD_L, pady=(PAD_M, PAD_S))
+        if not forecasts:
+            muted(box, "No product has sold recently enough to forecast.", size=13).grid(
+                row=1, column=0, columnspan=3, sticky="w", padx=PAD_L, pady=(0, PAD_M))
+            return
+        for row, f in enumerate(forecasts, start=1):
+            pady = (0, PAD_M if row == len(forecasts) else 4)
+            label(box, f.product, size=13).grid(row=row, column=0, sticky="w",
+                                                padx=PAD_L, pady=pady)
+            label(box, fmt.days_left(f.days_left), size=13, weight="bold").grid(
+                row=row, column=1, sticky="e", padx=PAD_M, pady=pady)
+            muted(box, f"runs out {f.run_out_date:%d %b %Y}", size=13).grid(
+                row=row, column=2, sticky="e", padx=(0, PAD_L), pady=pady)

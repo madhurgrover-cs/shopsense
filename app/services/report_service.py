@@ -12,15 +12,20 @@ from pathlib import Path
 
 from app.db import get_session
 from app.exceptions import ValidationError
+from app.ai import forecast
 from app.repositories import report_repository
 from app.services import report_export
 from app.services.auth_service import require_admin
-from app.services.dto import CategorySales, Dashboard, DailyRevenue, ProductSales, Report
+from app.services.dto import (
+    CategorySales, Dashboard, DailyRevenue, ProductSales, Report, StockForecast,
+)
 from app.services.user_session import UserSession
 from app.services.validation import date_range, day_bounds, today
 
 DASHBOARD_DAYS = 30         # revenue trend chart
 DASHBOARD_TOP_PRODUCTS = 5
+RUN_OUT_SOON_DAYS = 14      # "will run out within 14 days" on the dashboard
+RUNNING_OUT_LIST = 5        # products in the dashboard's "Running out soon" list
 REPORT_TOP_PRODUCTS = 20
 MAX_REPORT_DAYS = 366 * 3   # keeps one report to a sensible size
 # Category / product revenue = price x quantity of the items sold. Coupon discounts
@@ -37,6 +42,7 @@ def get_dashboard(admin: UserSession) -> Dashboard:
     require_admin(admin)
     first_day = today() - timedelta(days=DASHBOARD_DAYS - 1)
     with get_session() as session:
+        forecasts = _stock_forecasts(session)
         found = {r.day: r for r in report_repository.daily_revenue_since(session, first_day)}
         # One point per day, so days without sales show as 0 instead of being skipped
         # (a skipped day would make the line chart join two distant days directly).
@@ -62,7 +68,43 @@ def get_dashboard(admin: UserSession) -> Dashboard:
                              int(r.units_sold), Decimal(r.revenue))
                 for r in report_repository.top_products(session, DASHBOARD_TOP_PRODUCTS)
             ],
+            run_out_soon_count=sum(
+                (f.run_out_date - today()).days <= RUN_OUT_SOON_DAYS for f in forecasts),
+            running_out_soon=forecasts[:RUNNING_OUT_LIST],
         )
+
+
+# ---------------------------------------------------------------------------
+# Stock-out forecast
+# ---------------------------------------------------------------------------
+
+def stock_forecasts(admin: UserSession) -> list[StockForecast]:
+    """Forecast for every active product that sold in the last 30 days, most urgent
+    (fewest days left) first. Products without recent sales are not included."""
+    require_admin(admin)
+    with get_session() as session:
+        return _stock_forecasts(session)
+
+
+def _stock_forecasts(session) -> list[StockForecast]:
+    day = today()
+    # The window: the 30 complete days before today (see app/ai/forecast.py).
+    start, before = day_bounds(day - timedelta(days=forecast.WINDOW_DAYS),
+                               day - timedelta(days=1))
+    sales: dict[int, dict] = {}
+    for row in report_repository.daily_units_sold(session, start, before):
+        sales.setdefault(row.product_id, {})[row.day] = int(row.units)
+    results = []
+    for p in report_repository.active_products_with_stock(session):
+        if p.product_id not in sales:
+            continue  # no sales in the window: no forecast
+        f = forecast.forecast(int(p.stock), forecast.daily_series(sales[p.product_id], day), day)
+        if f is not None:
+            results.append(StockForecast(p.product_id, p.product, p.category, int(p.stock),
+                                         f.velocity, f.days_left, f.run_out_date,
+                                         f.reorder_qty))
+    results.sort(key=lambda f: (f.days_left, f.product))
+    return results
 
 
 # ---------------------------------------------------------------------------

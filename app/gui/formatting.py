@@ -41,6 +41,17 @@ def now() -> datetime:
     return datetime.now().astimezone()
 
 
+def days_left(days: float | None) -> str:
+    """Stock-out forecast: "< 1 day", "1 day", "37 days" (whole days, rounded down so
+    it never sounds better than it is); "-" when there is no forecast."""
+    if days is None:
+        return "-"
+    if days < 1:
+        return "< 1 day"
+    whole = int(days)
+    return "1 day" if whole == 1 else f"{whole} days"
+
+
 def rating(avg: float | None, count: int) -> str:
     """"★ 4.3 (12)" or "No reviews yet"."""
     if not count or avg is None:
