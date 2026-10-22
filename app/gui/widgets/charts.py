@@ -6,6 +6,10 @@ Memory notes (4 GB laptop):
   customers too, who never see a chart.
 - We use matplotlib.figure.Figure directly, NOT pyplot. pyplot keeps every figure in a
   global list until plt.close(); a plain Figure is freed with the widget that shows it.
+
+Light / dark mode: matplotlib takes single colour strings, so painters look colours up
+with theme.resolve() when they run. ChartCard keeps the last painter and simply runs it
+again when the mode changes, so a chart is re-coloured without fetching its data again.
 """
 
 from collections.abc import Callable, Sequence
@@ -14,10 +18,9 @@ from decimal import Decimal
 import customtkinter as ctk
 
 from app.gui import theme
-from app.gui.theme import COLORS, PAD_L, PAD_M, PAD_S
+from app.gui.theme import COLORS, PAD_L, PAD_M, PAD_S, resolve
 
-CHART_COLORS = [COLORS["accent"], COLORS["success"], COLORS["warning"], "#B48CFF",
-                "#5CC8E0", COLORS["danger"], "#F59F6B", "#9AA3B2"]
+CHART_COLORS = theme.CHART_COLORS  # Flipkart blue and orange first
 
 
 def compact_inr(value: float) -> str:
@@ -35,28 +38,47 @@ class ChartCard(ctk.CTkFrame):
     painter(figure) that draws on the figure; call it again to redraw with new data."""
 
     def __init__(self, parent, title: str, height: int = 260) -> None:
-        super().__init__(parent, fg_color=COLORS["surface"], corner_radius=theme.CORNER_RADIUS)
+        super().__init__(parent, fg_color=COLORS["surface"], corner_radius=theme.CORNER_RADIUS,
+                         border_width=1, border_color=COLORS["border"])
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
         from matplotlib.figure import Figure
 
-        ctk.CTkLabel(self, text=title, font=theme.heading_font(), text_color=COLORS["text"],
+        ctk.CTkLabel(self, text=title, font=theme.font(14, "bold"), text_color=COLORS["text"],
                      anchor="w").pack(fill="x", padx=PAD_L, pady=(PAD_M, 0))
         # matplotlib knows nothing about Windows display scaling: at 150 % its text would
         # look tiny next to the rest of the app. Raising the dpi by the same factor makes
         # chart text the same size as CTk text.
         scale = ctk.ScalingTracker.get_widget_scaling(self)
         self.figure = Figure(figsize=(5, height / 100), dpi=100 * scale,
-                             facecolor=COLORS["surface"], layout="constrained")
+                             layout="constrained")
         self.canvas = FigureCanvasTkAgg(self.figure, master=self)
         widget = self.canvas.get_tk_widget()
-        widget.configure(background=COLORS["surface"], highlightthickness=0,
-                         height=int(height * scale))
-        widget.pack(fill="both", expand=True, padx=PAD_S, pady=(0, PAD_S))
+        widget.configure(highlightthickness=0, height=int(height * scale))
+        widget.pack(fill="both", expand=True, padx=PAD_S, pady=(0, PAD_S))  # inside the border
+        self._painter: Callable | None = None
+        self._apply_background()
 
     def draw(self, painter: Callable) -> None:
+        self._painter = painter
         self.figure.clear()
         painter(self.figure)
         self.canvas.draw_idle()
+
+    def _apply_background(self) -> None:
+        """The figure and the Tk canvas behind it are not CTk widgets: colour them by
+        hand for the current mode."""
+        surface = resolve(COLORS["surface"])
+        self.figure.set_facecolor(surface)
+        self.canvas.get_tk_widget().configure(background=surface)
+
+    def _set_appearance_mode(self, mode_string: str) -> None:
+        """Called by CustomTkinter when the light / dark mode changes (see table.py)."""
+        super()._set_appearance_mode(mode_string)
+        self._apply_background()
+        if self._painter is not None:
+            self.draw(self._painter)  # same data, new colours
+        else:
+            self.canvas.draw_idle()
 
     def destroy(self) -> None:
         self.figure.clear()  # drop the drawing data right away, not at garbage collection
@@ -64,13 +86,13 @@ class ChartCard(ctk.CTkFrame):
 
 
 def _style(ax) -> None:
-    ax.set_facecolor(COLORS["surface"])
+    ax.set_facecolor(resolve(COLORS["surface"]))
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     for side in ("left", "bottom"):
-        ax.spines[side].set_color(COLORS["border"])
-    ax.tick_params(colors=COLORS["text_muted"], labelsize=8)
-    ax.grid(color=COLORS["border"], linewidth=0.6, alpha=0.6)
+        ax.spines[side].set_color(resolve(COLORS["border"]))
+    ax.tick_params(colors=resolve(COLORS["text_muted"]), labelsize=8)
+    ax.grid(color=resolve(COLORS["border"]), linewidth=0.6)
     ax.set_axisbelow(True)
 
 
@@ -86,8 +108,9 @@ def revenue_trend(days: Sequence, revenue: Sequence[Decimal]) -> Callable:
         _style(ax)
         x = list(range(len(days)))
         y = [float(v) for v in revenue]
-        ax.plot(x, y, color=COLORS["accent"], linewidth=2, marker="o", markersize=3)
-        ax.fill_between(x, y, color=COLORS["accent"], alpha=0.15)
+        accent = resolve(COLORS["accent"])
+        ax.plot(x, y, color=accent, linewidth=2, marker="o", markersize=3)
+        ax.fill_between(x, y, color=accent, alpha=0.08)  # flat light fill
         step = max(1, len(days) // 6)  # about 6 date labels, so they don't overlap
         ax.set_xticks(x[::step], [d.strftime("%d %b") for d in days[::step]])
         ax.set_ylim(bottom=0)
@@ -109,7 +132,7 @@ def horizontal_bars(labels: Sequence[str], values: Sequence[Decimal],
         bars = ax.barh(y, amounts, color=colors, height=0.6)
         ax.set_yticks(y, names)
         ax.bar_label(bars, labels=[compact_inr(a) for a in amounts], padding=4,
-                     color=COLORS["text_muted"], fontsize=8)
+                     color=resolve(COLORS["text_muted"]), fontsize=8)
         ax.set_xlim(right=max(amounts, default=1) * 1.18)  # room for the labels
         ax.grid(axis="y", visible=False)
         _money_axis(ax.xaxis)

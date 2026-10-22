@@ -18,14 +18,16 @@ from app.services.dto import Dashboard
 
 
 class KpiCard(ctk.CTkFrame):
-    """A big number with a caption, e.g. "Revenue  ₹55,96,943.73"."""
+    """A big number with a caption, e.g. "TOTAL REVENUE  ₹55,96,943.73": a flat white
+    panel with a thin coloured line along its top edge."""
 
     def __init__(self, parent, caption: str, color: str) -> None:
-        super().__init__(parent, fg_color=COLORS["surface"], corner_radius=theme.CORNER_RADIUS)
-        ctk.CTkFrame(self, height=4, width=40, fg_color=color, corner_radius=2).pack(
-            anchor="w", padx=PAD_L, pady=(PAD_M, 0))
-        muted(self, caption, size=13).pack(fill="x", padx=PAD_L, pady=(PAD_S, 0))
-        self.value = label(self, "-", size=24, weight="bold")
+        super().__init__(parent, fg_color=COLORS["surface"], corner_radius=theme.CORNER_RADIUS,
+                         border_width=1, border_color=COLORS["border"])
+        ctk.CTkFrame(self, height=3, width=1, fg_color=color, corner_radius=0).pack(
+            fill="x", padx=1, pady=(1, 0))
+        muted(self, caption.upper(), size=11).pack(fill="x", padx=PAD_L, pady=(PAD_M, 0))
+        self.value = label(self, "-", size=22, weight="bold")
         self.value.pack(fill="x", padx=PAD_L)
         self.note = muted(self, "", size=12)
         self.note.pack(fill="x", padx=PAD_L, pady=(0, PAD_M))
@@ -47,9 +49,9 @@ class DashboardScreen(Screen):
 
         self.kpis = {
             "revenue": KpiCard(body, "Total revenue", COLORS["accent"]),
-            "orders": KpiCard(body, "Orders", COLORS["success"]),
-            "customers": KpiCard(body, "Customers", "#B48CFF"),
-            "low_stock": KpiCard(body, "Low-stock products", COLORS["warning"]),
+            "orders": KpiCard(body, "Orders", COLORS["cart"]),
+            "customers": KpiCard(body, "Customers", COLORS["success"]),
+            "low_stock": KpiCard(body, "Low-stock products", COLORS["buy"]),
         }
         for column, kpi in enumerate(self.kpis.values()):
             kpi.grid(row=0, column=column, sticky="nsew", padx=PAD_S, pady=PAD_S)
@@ -106,7 +108,7 @@ class DashboardScreen(Screen):
         """Compact list: product, days left, run-out date (most urgent first)."""
         box = self.running_out
         clear(box)
-        label(box, "Running out soon", size=16, weight="bold").grid(
+        label(box, "Running out soon", size=14, weight="bold").grid(
             row=0, column=0, columnspan=3, sticky="w", padx=PAD_L, pady=(PAD_M, PAD_S))
         if not forecasts:
             muted(box, "No product has sold recently enough to forecast.", size=13).grid(

@@ -178,7 +178,7 @@ def no_seed_embeddings(db_session):
 
 
 @pytest.fixture(scope="session")
-def gui_app():
+def gui_app(tmp_path_factory):
     """ONE hidden ShopSense window for every GUI test in the whole run.
 
     On Windows with Python 3.14, creating a second Tk interpreter after the first one
@@ -186,10 +186,16 @@ def gui_app():
     all GUI tests share this single window, created on first use and destroyed at the
     very end. Network-touching and popup functions are replaced: popups are recorded in
     app.popups (their titles) instead of opening windows.
+
+    The light / dark preference file is redirected to a temporary file, so tests never
+    read or overwrite the developer's real one, and always start in light mode.
     """
     from app.gui import app as app_module  # imported here: only GUI tests need Tk
+    from app.gui import preferences
 
     patch = pytest.MonkeyPatch()
+    patch.setenv(preferences.ENV_VAR,
+                 str(tmp_path_factory.mktemp("prefs") / "preferences.json"))
     # The window gets its OWN stand-in for system_service. (Patching functions on the
     # real module would last for the whole session and leak into non-GUI tests.)
     # No database check, and customer logins never load the real AI model.
@@ -298,3 +304,26 @@ def clock(monkeypatch) -> FakeClock:
     fake = FakeClock()
     monkeypatch.setattr(auth_service, "utcnow", fake)
     return fake
+
+
+@pytest.fixture
+def strict_theme_switch(monkeypatch):
+    """Make light / dark switches fail loudly.
+
+    CustomTkinter calls every widget's _set_appearance_mode() on a switch but silently
+    skips any that raise, which would hide a widget that can't re-colour itself. This
+    replaces that loop with one that lets errors through, and switches back to light
+    mode at the end."""
+    import customtkinter as ctk
+
+    from app.gui import theme
+
+    tracker = ctk.AppearanceModeTracker
+
+    def update_callbacks(cls):
+        mode = "Dark" if cls.appearance_mode == 1 else "Light"
+        for callback in list(cls.callback_list):
+            callback(mode)
+    monkeypatch.setattr(tracker, "update_callbacks", classmethod(update_callbacks))
+    yield
+    theme.set_mode(theme.LIGHT)

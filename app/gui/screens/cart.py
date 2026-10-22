@@ -1,4 +1,5 @@
-"""Cart: quantities, remove, coupon, totals, payment method, checkout.
+"""Cart, Flipkart style: the items on the left with PLACE ORDER at the bottom, and the
+PRICE DETAILS box (then coupon and payment method) on the right.
 
 Every change is sent to cart_service, which returns the updated CartView; the screen
 then simply redraws from it. Totals are never calculated in the GUI.
@@ -9,10 +10,10 @@ import customtkinter as ctk
 from app.gui import formatting as fmt
 from app.gui import theme
 from app.gui.screens.base import Screen
-from app.gui.theme import COLORS, CORNER_RADIUS, PAD_L, PAD_M, PAD_S, PAD_XL
+from app.gui.theme import COLORS, PAD_L, PAD_M, PAD_S, PAD_XL, PAD_XS
 from app.gui.widgets.common import (
-    QuantityStepper, auto_wrap, card, clear, empty_state, form_entry, label, link_button, muted,
-    section_title,
+    QuantityStepper, auto_wrap, caps_heading, card, category_tile, clear, divider, form_entry,
+    icon, label, link_button, muted,
 )
 from app.exceptions import InvalidCouponError
 from app.services import cart_service, order_service
@@ -20,6 +21,7 @@ from app.services.dto import CartLine, CartView
 
 # Button label -> payment method code expected by order_service.checkout.
 PAYMENT_METHODS = {"UPI": "upi", "Card": "card", "COD": "cod", "Wallet": "wallet"}
+SIDE_WIDTH = 360  # the PRICE DETAILS column
 
 
 def line_problem(line: CartLine) -> str | None:
@@ -35,67 +37,96 @@ def line_problem(line: CartLine) -> str | None:
 
 class CartScreen(Screen):
     title = "Cart"
+    show_title = False  # "My Cart (N)" heads the items panel
 
     def __init__(self, parent, app) -> None:
         super().__init__(parent, app)
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        self._lines = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self._lines.grid(row=0, column=0, sticky="nsew", padx=(PAD_L, PAD_S), pady=(0, PAD_L))
+        # --- Left: the items panel, with the PLACE ORDER bar at its bottom.
+        self._items = card(self)
+        self._items.grid(row=0, column=0, sticky="nsew", padx=(PAD_M, PAD_S), pady=PAD_M)
+        self._heading = label(self._items, "My Cart", size=17, weight="bold")
+        self._heading.pack(fill="x", padx=PAD_L, pady=(PAD_M, PAD_S))
+        divider(self._items).pack(fill="x")
 
-        self._summary = card(self, width=340)
-        self._summary.grid(row=0, column=1, sticky="n", padx=(PAD_S, PAD_XL), pady=(PAD_S, PAD_L))
-        self._build_summary()
+        self._order_bar = ctk.CTkFrame(self._items, fg_color="transparent")
+        self._order_bar.pack(side="bottom", fill="x")
+        divider(self._order_bar).pack(fill="x")
+        self._checkout = ctk.CTkButton(self._order_bar, text="PLACE ORDER", width=240,
+                                       command=self._place_order, **theme.buy_button_style())
+        self._checkout.pack(side="right", padx=PAD_L, pady=PAD_M)
+        self._problem = label(self._order_bar, "", size=12, color=COLORS["danger"],
+                              wraplength=380)
+        self._problem.pack(side="left", padx=PAD_L)
+
+        self._lines = ctk.CTkScrollableFrame(self._items, fg_color="transparent")
+        self._lines.pack(fill="both", expand=True, padx=PAD_XS)
+
+        # --- Right: PRICE DETAILS, then coupon and payment.
+        self._side = ctk.CTkFrame(self, fg_color="transparent", width=SIDE_WIDTH)
+        self._side.grid(row=0, column=1, sticky="n", padx=(PAD_S, PAD_M), pady=PAD_M)
+        self._build_price_details()
+        self._build_checkout_options()
         self._cart: CartView | None = None
 
-    def _build_summary(self) -> None:
-        s = self._summary
-        section_title(s, "Order summary").pack(fill="x", padx=PAD_L, pady=(PAD_L, PAD_M))
-        self._subtotal = self._summary_row("Subtotal")
-        self._discount = self._summary_row("Discount")
-        ctk.CTkFrame(s, height=1, fg_color=COLORS["border"]).pack(fill="x", padx=PAD_L, pady=PAD_S)
-        self._total = self._summary_row("Total", bold=True)
+    def _build_price_details(self) -> None:
+        box = card(self._side, width=SIDE_WIDTH)
+        box.pack(fill="x")
+        caps_heading(box, "Price details").pack(fill="x", padx=PAD_L, pady=PAD_M)
+        divider(box).pack(fill="x")
+        rows = ctk.CTkFrame(box, fg_color="transparent")
+        rows.pack(fill="x", padx=PAD_L, pady=(PAD_M, 0))
+        self._price_label, self._subtotal = self._price_row(rows, "Price")
+        _name, self._discount = self._price_row(rows, "Discount")
+        self._discount.configure(text_color=COLORS["success"])
+        divider(box).pack(fill="x", padx=PAD_L, pady=PAD_S)
+        totals = ctk.CTkFrame(box, fg_color="transparent")
+        totals.pack(fill="x", padx=PAD_L)
+        _name, self._total = self._price_row(totals, "Total Amount", bold=True)
+        ctk.CTkFrame(box, height=PAD_M, width=1, fg_color="transparent").pack()
+        # "You will save ..." (packed only when there is a discount, see _render).
+        self._savings_line = ctk.CTkFrame(box, fg_color="transparent")
+        divider(self._savings_line).pack(fill="x", padx=PAD_L)
+        self._savings = label(self._savings_line, "", size=13, weight="bold",
+                              color=COLORS["success"])
+        self._savings.pack(fill="x", padx=PAD_L, pady=PAD_M)
 
-        label(s, "Coupon", size=13, weight="bold").pack(fill="x", padx=PAD_L, pady=(PAD_M, 4))
-        coupon_row = ctk.CTkFrame(s, fg_color="transparent")
+    def _price_row(self, parent, name: str, bold: bool = False):
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", pady=3)
+        size, weight = (16, "bold") if bold else (14, "normal")
+        name_label = label(row, name, size=size, weight=weight)
+        name_label.pack(side="left")
+        value = label(row, "", size=size, weight=weight)
+        value.pack(side="right")
+        return name_label, value
+
+    def _build_checkout_options(self) -> None:
+        box = card(self._side, width=SIDE_WIDTH)
+        box.pack(fill="x", pady=(PAD_S, 0))
+        caps_heading(box, "Apply coupon").pack(fill="x", padx=PAD_L, pady=(PAD_M, PAD_S))
+        coupon_row = ctk.CTkFrame(box, fg_color="transparent")
         coupon_row.pack(fill="x", padx=PAD_L)
-        self._coupon = form_entry(coupon_row, "e.g. WELCOME10")
-        self._coupon.configure(width=170)
-        self._coupon.pack(side="left")
+        coupon_row.grid_columnconfigure(0, weight=1)
+        self._coupon = form_entry(coupon_row, "Enter coupon code, e.g. WELCOME10")
+        self._coupon.configure(height=34)
+        self._coupon.grid(row=0, column=0, sticky="ew")
         self._coupon.bind("<Return>", lambda _e: self._apply_coupon())
-        ctk.CTkButton(coupon_row, text="Apply", width=80, command=self._apply_coupon,
-                      **theme.secondary_button_style()).pack(side="left", padx=(PAD_S, 0))
-        self._coupon_info = muted(s, "", size=12)
-        self._coupon_info.pack(fill="x", padx=PAD_L, pady=(4, 0))
-        self._remove_coupon = link_button(s, "Remove coupon", self._clear_coupon)
+        ctk.CTkButton(coupon_row, text="APPLY", width=72, command=self._apply_coupon,
+                      **theme.secondary_button_style()).grid(row=0, column=1, padx=(PAD_S, 0))
+        self._coupon_info = muted(box, "", size=12)  # packed while a coupon is applied
+        self._remove_coupon = link_button(box, "Remove coupon", self._clear_coupon)
 
-        label(s, "Payment method", size=13, weight="bold").pack(
-            fill="x", padx=PAD_L, pady=(PAD_M, 4))
+        self._payment_heading = caps_heading(box, "Payment method")
+        self._payment_heading.pack(fill="x", padx=PAD_L, pady=(PAD_M, PAD_S))
         self._payment = ctk.CTkSegmentedButton(
-            s, values=list(PAYMENT_METHODS),
-            font=theme.font(13), selected_color=COLORS["accent"],
-            selected_hover_color=COLORS["accent_hover"], unselected_color=COLORS["bg"],
-            unselected_hover_color=COLORS["surface_hover"], text_color=COLORS["text"])
+            box, values=list(PAYMENT_METHODS), font=theme.font(13), **theme.segmented_style())
         self._payment.set("UPI")
         self._payment.pack(fill="x", padx=PAD_L)
-        muted(s, "Payments are simulated; no card details are collected.", size=11,
-              wraplength=290).pack(fill="x", padx=PAD_L, pady=(4, 0))
-
-        self._checkout = ctk.CTkButton(s, text="Place order", command=self._place_order,
-                                       **theme.primary_button_style())
-        self._checkout.pack(fill="x", padx=PAD_L, pady=(PAD_M, PAD_S))
-        self._problem = label(s, "", size=12, color=COLORS["danger"], wraplength=290)
-        self._problem.pack(fill="x", padx=PAD_L, pady=(0, PAD_L))
-
-    def _summary_row(self, name: str, bold: bool = False) -> ctk.CTkLabel:
-        row = ctk.CTkFrame(self._summary, fg_color="transparent")
-        row.pack(fill="x", padx=PAD_L, pady=2)
-        weight = "bold" if bold else "normal"
-        label(row, name, size=15 if bold else 14, weight=weight).pack(side="left")
-        value = label(row, "", size=15 if bold else 14, weight=weight)
-        value.pack(side="right")
-        return value
+        muted(box, "Payments are simulated; no card details are collected.", size=11,
+              wraplength=SIDE_WIDTH - 2 * PAD_L).pack(fill="x", padx=PAD_L, pady=(PAD_XS, PAD_M))
 
     # ------------------------------------------------------------------ loading
 
@@ -129,28 +160,38 @@ class CartScreen(Screen):
         self._cart = cart
         clear(self._lines)
         if cart.is_empty:
-            box = card(self._lines)
-            box.pack(fill="x", padx=PAD_S, pady=PAD_S)
-            label(box, "Your cart is empty", size=18, weight="bold").pack(
-                fill="x", padx=PAD_L, pady=(PAD_L, 2))
-            empty_state(box, "Browse the shop and add something you like.").pack(
-                fill="x", padx=PAD_L)
-            ctk.CTkButton(box, text="Go to shop", width=140,
-                          command=lambda: self.app.navigate("shop"),
-                          **theme.primary_button_style()).pack(anchor="w", padx=PAD_L, pady=PAD_L)
-        for line in cart.lines:
-            self._render_line(line)
+            self._render_empty()
+        else:
+            self._side.grid()
+            # (A CTkScrollableFrame is packed through its outer frame, _parent_frame.)
+            self._order_bar.pack(side="bottom", fill="x", before=self._lines._parent_frame)
+            self._heading.configure(text=f"My Cart ({cart.item_count})")
+            for index, line in enumerate(cart.lines):
+                if index:
+                    divider(self._lines).pack(fill="x", padx=PAD_M)
+                self._render_line(line)
 
+        count = cart.item_count
+        self._price_label.configure(text=f"Price ({count} item{'' if count == 1 else 's'})")
         self._subtotal.configure(text=fmt.inr(cart.subtotal))
         self._discount.configure(text=f"− {fmt.inr(cart.discount)}" if cart.discount else "-")
         self._total.configure(text=fmt.inr(cart.total))
+        if cart.discount:
+            self._savings.configure(text=f"You will save {fmt.inr(cart.discount)} on this "
+                                         "order")
+            self._savings_line.pack(fill="x")
+        else:
+            self._savings_line.pack_forget()
         if cart.coupon:
             self._coupon_info.configure(text=f"{cart.coupon.code} applied: "
                                              f"{cart.coupon.percent_off}% off",
                                         text_color=COLORS["success"])
+            self._coupon_info.pack(fill="x", padx=PAD_L, pady=(PAD_XS, 0),
+                                   before=self._payment_heading)
             self._remove_coupon.pack(anchor="w", padx=PAD_L - 6, after=self._coupon_info)
         else:
             self._coupon_info.configure(text="")
+            self._coupon_info.pack_forget()
             self._remove_coupon.pack_forget()
 
         problems = [line for line in cart.lines if line_problem(line)]
@@ -160,44 +201,63 @@ class CartScreen(Screen):
         elif problems:
             self._problem.configure(text="Some items can't be ordered as they are. "
                                          "Please fix the items marked in red.")
-            self._checkout.configure(state="disabled")
+            self._checkout.configure(state="disabled", fg_color=COLORS["disabled"])
         else:
             self._problem.configure(text="")
-            self._checkout.configure(state="normal")
+            self._checkout.configure(state="normal", fg_color=COLORS["buy"])
+
+    def _render_empty(self) -> None:
+        """Flipkart-style empty cart: icon, two lines and a SHOP NOW button."""
+        self._side.grid_remove()
+        self._order_bar.pack_forget()
+        self._heading.configure(text="My Cart")
+        box = ctk.CTkFrame(self._lines, fg_color="transparent")
+        box.pack(pady=(PAD_XL * 3, PAD_XL))
+        icon(box, theme.ICONS["cart"], size=72, color=COLORS["accent"]).pack()
+        label(box, "Your cart is empty!", size=18, weight="bold").pack(pady=(PAD_M, 2))
+        muted(box, "Add items to it now.", size=13).pack()
+        ctk.CTkButton(box, text="SHOP NOW", width=220, command=lambda: self.app.navigate("shop"),
+                      **theme.buy_button_style()).pack(pady=(PAD_L, 0))
 
     def _render_line(self, line: CartLine) -> None:
         problem = line_problem(line)
-        box = card(self._lines, border_width=1 if problem else 0,
-                   border_color=COLORS["danger"])
-        box.pack(fill="x", padx=PAD_S, pady=PAD_S // 2 + 1)
-        box.grid_columnconfigure(0, weight=1)
+        row = ctk.CTkFrame(self._lines, fg_color="transparent")
+        row.pack(fill="x", padx=PAD_S, pady=PAD_M)
+        row.grid_columnconfigure(1, weight=1)
 
-        # Text block on the left takes all spare width; its labels wrap to that width.
-        text = ctk.CTkFrame(box, fg_color="transparent")
-        text.grid(row=0, column=0, sticky="ew", padx=PAD_M, pady=PAD_M)
-        name = label(text, line.name, size=14, weight="bold", wraplength=200)
+        # A neutral tile stands in for the product photo (cart lines carry no category).
+        thumb = category_tile(row, "", height=88, icon_size=34)
+        thumb.configure(width=88)
+        thumb.grid(row=0, column=0, rowspan=2, sticky="n", padx=(PAD_S, PAD_L))
+
+        info = ctk.CTkFrame(row, fg_color="transparent")
+        info.grid(row=0, column=1, sticky="ew")
+        name = label(info, line.name, size=14, wraplength=300)
         name.pack(fill="x")
-        auto_wrap(name, text)
+        auto_wrap(name, info)
         name.bind("<Button-1>", lambda _e: self.app.navigate(
             "product", product_id=line.product_id, back_to="cart"))
         name.configure(cursor="hand2")
-        muted(text, f"{fmt.inr(line.unit_price)} each", size=12).pack(fill="x")
+        label(info, fmt.inr(line.line_total), size=17, weight="bold").pack(
+            fill="x", pady=(PAD_XS, 0))
+        if line.qty > 1:
+            muted(info, f"{fmt.inr(line.unit_price)} each", size=12).pack(fill="x")
         if problem:
-            message = label(text, problem, size=12, color=COLORS["danger"], wraplength=200)
+            message = label(info, problem, size=12, weight="bold", color=COLORS["danger"],
+                            wraplength=300)
             message.pack(fill="x", pady=(2, 0))
-            auto_wrap(message, text)
+            auto_wrap(message, info)
 
-        stepper = QuantityStepper(box, line.qty, maximum=max(line.qty, min(line.stock, 99)),
+        actions = ctk.CTkFrame(row, fg_color="transparent")
+        actions.grid(row=1, column=1, sticky="w", pady=(PAD_S, 0))
+        stepper = QuantityStepper(actions, line.qty, maximum=max(line.qty, min(line.stock, 99)),
                                   on_change=lambda qty: self._set_qty(line, qty))
-        stepper.grid(row=0, column=1, padx=PAD_M)
+        stepper.pack(side="left")
         stepper.set_enabled(line.is_active)
-        label(box, fmt.inr(line.line_total), size=15, weight="bold", width=110).grid(
-            row=0, column=2, padx=PAD_M)
-        ctk.CTkButton(box, text="Remove", width=80, height=32, corner_radius=CORNER_RADIUS,
+        ctk.CTkButton(actions, text="REMOVE", width=0, height=28, corner_radius=theme.CORNER_RADIUS,
                       fg_color="transparent", hover_color=COLORS["surface_hover"],
-                      text_color=COLORS["danger"], font=theme.font(13),
-                      command=lambda: self._remove(line)).grid(
-            row=0, column=3, padx=(0, PAD_M))
+                      text_color=COLORS["text"], font=theme.font(13, "bold"),
+                      command=lambda: self._remove(line)).pack(side="left", padx=(PAD_L, 0))
 
     # ------------------------------------------------------------------ actions
 

@@ -9,6 +9,7 @@ from decimal import Decimal
 import pytest
 
 from app.exceptions import SqlRejectedError, ValidationError
+from app.gui import theme
 from app.gui.screens.admin import coupons as coupons_screen
 from app.gui.screens.admin import products as products_screen
 from app.gui.widgets.charts import compact_inr
@@ -484,6 +485,16 @@ def test_audit_log(admin_window):
     assert [e.id for e in screen.table.items] == [1]
 
 
+def test_admin_has_seller_nav_and_no_search(admin_window):
+    w = admin_window
+    assert w.sidebar.winfo_manager() == "grid"            # the slim left navigation
+    assert w.header._search_box.winfo_manager() == ""     # shop search is for customers
+    assert w.header.subtitle.cget("text") == "Seller Hub"
+    show(w, "admin_orders")
+    active_row, _button = w.sidebar._rows["admin_orders"]
+    assert active_row.cget("fg_color") == theme.COLORS["selected_nav"]
+
+
 def test_ask_data_shows_answer_table_and_collapsible_sql(admin_window, monkeypatch):
     asked = []
     answer = DataAnswer("Top categories?", "SELECT category, revenue\nFROM v_sales_by_category",
@@ -538,6 +549,25 @@ def test_ask_data_needs_a_question(admin_window, monkeypatch):
     screen._question.delete(0, "end")
     screen.ask()
     assert screen._summary.cget("text") == "Type a question first."
+
+
+def test_every_admin_screen_switches_to_dark_and_back(admin_window, strict_theme_switch):
+    """Each admin screen, with its data loaded, re-colours on a light / dark switch
+    (strict_theme_switch turns any widget that fails to restyle into an error)."""
+    w = admin_window
+    for key in list(w._screens):
+        show(w, key)
+        w.set_theme("dark")
+        w.update()
+        assert theme.current_mode() == "dark"
+        w.set_theme("light")
+        w.update()
+    dashboard = show(w, "admin_dashboard")
+    w.set_theme("dark")
+    surface = theme.COLORS["surface"][1].lower()
+    for chart in (dashboard.trend, dashboard.categories, dashboard.top):
+        assert len(chart.figure.axes) == 1  # redrawn with its data, not left empty
+        assert chart.canvas.get_tk_widget().cget("background").lower() == surface
 
 
 # ---------------------------------------------------------------------------

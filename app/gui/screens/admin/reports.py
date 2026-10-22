@@ -12,7 +12,7 @@ from app.gui import formatting as fmt
 from app.gui import theme
 from app.gui.screens.admin.common import button, set_enabled, toolbar
 from app.gui.screens.base import Screen
-from app.gui.theme import COLORS, PAD_L, PAD_M, PAD_S, PAD_XL
+from app.gui.theme import PAD_L, PAD_M, PAD_S, PAD_XL
 from app.gui.widgets.common import label, muted
 from app.gui.widgets.date_range import DateRangeBar
 from app.gui.widgets.table import Column, DataTable
@@ -52,9 +52,7 @@ class ReportsScreen(Screen):
         bar = toolbar(self)
         self._kind = ctk.CTkSegmentedButton(
             bar, values=list(REPORT_KINDS), command=lambda _v: self.run(),
-            font=theme.font(13), selected_color=COLORS["accent"],
-            selected_hover_color=COLORS["accent_hover"], unselected_color=COLORS["surface"],
-            unselected_hover_color=COLORS["surface_hover"], text_color=COLORS["text"])
+            font=theme.font(13), **theme.segmented_style())
         self._kind.set("Sales by category")
         self._kind.pack(side="left")
         self._dates = DateRangeBar(bar, on_change=self.run, default_days=30)

@@ -1,20 +1,23 @@
-"""The main window: sidebar on the left; top bar (title, loading indicator) and the
-current screen on the right.
+"""The main window: the blue header across the top, then the current screen. Admins
+also get a slim navigation column on the left (a "seller dashboard"); customers
+navigate with the header (search, Account, Orders, Cart) and the shop's category strip.
 
-    +-----------+------------------------------------------------+
-    | ShopSense | Title         AI search ready  Loading... ~~~   |
-    |           +------------------------------------------------+
-    |  Shop     |                                                |
-    |  Cart     |              current screen                    |
-    |  Orders   |                                                |
-    |  (user)   |                                                |
-    |  Log out  |                                                |
-    +-----------+------------------------------------------------+
+    Customer                                  Admin
+    +-------------------------------------+   +--------------------------------------+
+    | ShopSense [ search........ ] Cart   |   | ShopSense / Seller Hub   Admin Log out|
+    +-------------------------------------+   +----------+---------------------------+
+    | Page title (not on the shop)        |   | Dashboard| Page title                |
+    |            current screen           |   | Products |     current screen        |
+    +-------------------------------------+   +----------+---------------------------+
 
 Screens depend on who is logged in. Guests get Login / Register, customers the shop,
-admins their own sidebar (dashboard, products, orders, ...). On login, the screens for
+admins their own navigation (dashboard, products, orders, ...). On login, the screens for
 that role are created; on logout they are destroyed, so nothing from one user's
 session (cart, orders, typed text) can leak into the next one.
+
+Light / dark mode: the header's toggle calls toggle_theme(), which switches
+CustomTkinter's appearance mode (every widget re-colours itself, see theme.py) and
+saves the choice in a small local file (preferences.py), read again at the next start.
 """
 
 import gc
@@ -24,7 +27,7 @@ from tkinter import filedialog
 
 import customtkinter as ctk
 
-from app.gui import theme
+from app.gui import preferences, theme
 from app.gui.screens.admin.ask_data import AskDataScreen
 from app.gui.screens.admin.audit import AuditLogScreen
 from app.gui.screens.admin.coupons import CouponsScreen
@@ -42,18 +45,17 @@ from app.gui.screens.product import ProductScreen
 from app.gui.screens.register import RegisterScreen
 from app.gui.screens.shop import ShopScreen
 from app.gui.tasks import TaskRunner
-from app.gui.theme import COLORS, PAD_L, PAD_M, PAD_S
-from app.gui.widgets.common import label, muted
+from app.gui.theme import COLORS, PAD_M, PAD_XL
 from app.gui.widgets.dialogs import ConfirmDialog, MessageDialog, show_error
+from app.gui.widgets.header import Header
 from app.gui.widgets.sidebar import Sidebar
-from app.gui.widgets.status import StatusIndicator
 from app.services import system_service
 from app.services.error_messages import friendly_error
 from app.services.user_session import UserSession
 
 log = logging.getLogger(__name__)
 
-# (screen key, sidebar label, screen class). Screens not in a menu (product page) are
+# (screen key, menu label, screen class). Screens not in a menu (product page) are
 # still created for the role; they are reached by clicking, not from the sidebar.
 GUEST_SCREENS = [("login", "Sign in", LoginScreen), ("register", "Create account", RegisterScreen)]
 CUSTOMER_SCREENS = [("shop", "Shop", ShopScreen), ("cart", "Cart", CartScreen),
@@ -72,17 +74,20 @@ ADMIN_SCREENS = [
 ]
 
 AI_POLL_MS = 500  # how often the main thread checks whether the AI model has loaded
-# AI model state -> (top bar text, colour key)
+# AI model state -> (text under the logo, colour key). The header is blue, so the
+# colours are white / pale blue rather than green / orange.
 AI_STATUS = {
-    "loading": ("Loading AI search...", "text_muted"),
-    "ready": ("● AI search ready", "success"),
-    "failed": ("AI search unavailable, using keywords", "warning"),
+    "loading": ("Loading AI search...", "header_muted"),
+    "ready": ("● AI search ready", "header_text"),
+    "failed": ("AI search unavailable, using keywords", "header_muted"),
 }
 
 
 class ShopSenseApp(ctk.CTk):
     def __init__(self) -> None:
-        theme.apply_global_theme()
+        # The saved light / dark mode must be set BEFORE any widget exists, so the
+        # window opens in it (no flash of the other mode).
+        theme.apply_global_theme(preferences.load_theme())
         super().__init__(fg_color=COLORS["bg"])
         self.title(theme.APP_NAME)
         self.minsize(*theme.MIN_WINDOW_SIZE)
@@ -98,15 +103,24 @@ class ShopSenseApp(ctk.CTk):
         self._ai_poll: str | None = None  # id of the scheduled after() check
 
         self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+        self.header = Header(self, on_search=self._search, on_navigate=self.navigate,
+                             on_logout=self.logout, on_toggle_theme=self.toggle_theme)
+        self.header.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.status = self.header.status
+        self._ai_status = self.header.ai_status  # the small line under the logo
+        # Admins only (see _show_sidebar).
         self.sidebar = Sidebar(self, on_navigate=self.navigate)
-        self.sidebar.grid(row=0, column=0, sticky="nsw")
 
         main = ctk.CTkFrame(self, fg_color=COLORS["bg"], corner_radius=0)
-        main.grid(row=0, column=1, sticky="nsew")
+        main.grid(row=1, column=1, sticky="nsew")
         main.grid_columnconfigure(0, weight=1)
         main.grid_rowconfigure(1, weight=1)
-        self._build_top_bar(main)
+        # Page title: a slim line above the screen. Hidden on screens that start with
+        # their own heading (shop, login, register): see Screen.show_title.
+        self._title = ctk.CTkLabel(main, text="", font=theme.title_font(),
+                                   text_color=COLORS["text"], anchor="w")
+        self._title.grid(row=0, column=0, sticky="ew", padx=PAD_XL, pady=(PAD_M, 0))
 
         self._content = ctk.CTkFrame(main, fg_color=COLORS["bg"], corner_radius=0)
         self._content.grid(row=1, column=0, sticky="nsew")
@@ -137,18 +151,11 @@ class ShopSenseApp(ctk.CTk):
             self.geometry(f"{min(width, screen_w - margin_w)}x{min(height, screen_h - margin_h)}+0+0")
             self.after(0, lambda: self.state("zoomed"))  # Windows: maximise
 
-    def _build_top_bar(self, parent) -> None:
-        bar = ctk.CTkFrame(parent, fg_color=COLORS["bg"], corner_radius=0, height=72)
-        bar.grid(row=0, column=0, sticky="ew", padx=PAD_L, pady=(PAD_M, PAD_S))
-        bar.grid_columnconfigure(1, weight=1)
-        self._title = ctk.CTkLabel(bar, text="", font=theme.title_font(),
-                                   text_color=COLORS["text"])
-        self._title.grid(row=0, column=0, sticky="w")
-        self._ai_status = ctk.CTkLabel(bar, text="", font=theme.small_font(),
-                                       text_color=COLORS["text_muted"])
-        self._ai_status.grid(row=0, column=1, sticky="e", padx=PAD_M)
-        self.status = StatusIndicator(bar)
-        self.status.grid(row=0, column=2, sticky="e")
+    def _show_sidebar(self, visible: bool) -> None:
+        if visible:
+            self.sidebar.grid(row=1, column=0, sticky="nsw")
+        else:
+            self.sidebar.grid_remove()
 
     # ------------------------------------------------------------------ screens
 
@@ -177,7 +184,8 @@ class ShopSenseApp(ctk.CTk):
 
     def _show_guest(self, email: str = "") -> None:
         self._set_screens(GUEST_SCREENS)
-        self._set_footer()
+        self._show_sidebar(False)
+        self.header.set_user(None)
         self.navigate("login", email=email)
 
     def navigate(self, key: str, **kwargs) -> None:
@@ -191,8 +199,17 @@ class ShopSenseApp(ctk.CTk):
         screen.grid()
         self._current = key
         self._title.configure(text=screen.title)
+        if screen.show_title:
+            self._title.grid()
+        else:
+            self._title.grid_remove()
         self.sidebar.set_active(key)
+        self.header.set_active(key)
         screen.on_show(**kwargs)
+
+    def _search(self, query: str) -> None:
+        """The header's search box: results are shown on the shop screen."""
+        self.navigate("shop", search=query)
 
     # ------------------------------------------------------------------ session
 
@@ -206,7 +223,8 @@ class ShopSenseApp(ctk.CTk):
         else:
             self._set_screens(CUSTOMER_SCREENS, CUSTOMER_HIDDEN_SCREENS)
             start = "shop"
-        self._set_footer()
+        self._show_sidebar(user.is_admin)
+        self.header.set_user(user)
         self.navigate(start)
         if not user.is_admin:
             self._preload_search_model()
@@ -262,20 +280,18 @@ class ShopSenseApp(ctk.CTk):
         text, color = AI_STATUS.get(state, ("", "text_muted"))
         self._ai_status.configure(text=text, text_color=COLORS[color])
 
-    def _set_footer(self) -> None:
-        footer = self.sidebar.footer
-        for child in footer.winfo_children():
-            child.destroy()
-        if self.user is None:
-            return
-        ctk.CTkFrame(footer, height=1, fg_color=COLORS["border"]).pack(fill="x", pady=(0, PAD_M))
-        label(footer, self.user.name, size=13, weight="bold").pack(fill="x", padx=PAD_S)
-        muted(footer, self.user.email, size=11).pack(fill="x", padx=PAD_S)
-        if self.user.is_admin:
-            muted(footer, "Administrator", size=11).pack(fill="x", padx=PAD_S)
-        ctk.CTkButton(footer, text="Log out", command=self.logout,
-                      **{**theme.secondary_button_style(), "height": 34}).pack(
-            fill="x", pady=(PAD_S, 0))
+    # ------------------------------------------------------------------ theme
+
+    def toggle_theme(self) -> None:
+        """The header's Dark / Light button: switch mode and remember it."""
+        self.set_theme(theme.other_mode(theme.current_mode()))
+
+    def set_theme(self, mode: str) -> None:
+        """Switch the running app to "light" or "dark" (no restart needed) and save it.
+        Widgets re-colour themselves (and the header relabels its toggle) through
+        CustomTkinter's appearance-mode callbacks."""
+        theme.set_mode(mode)
+        preferences.save_theme(mode)
 
     # ------------------------------------------------------------------ feedback
 

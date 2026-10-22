@@ -135,8 +135,9 @@ def test_customer_login_opens_shop_with_cards(window, fake_services, monkeypatch
     assert {"shop", "cart", "orders", "product"} <= set(window._screens)
     on_screen = texts(window._screens["shop"]._grid)
     assert "Test Fleece Hoodie" in on_screen and "₹1,299.00" in on_screen
-    assert "★ 4.5 (2)" in on_screen and " Positive " in on_screen
-    assert "No reviews yet" in on_screen  # the socks
+    assert " 4.5 ★ " in on_screen and "(2)" in on_screen  # green rating pill + count
+    assert "Customers love it" in on_screen                 # the Positive sentiment line
+    assert "No ratings yet" in on_screen  # the socks
 
 
 def test_recommended_row_on_default_view(window, fake_services):
@@ -154,7 +155,7 @@ def test_recommended_row_hidden_on_search_and_category(window, fake_services):
     shop = window._screens["shop"]
     shop._clear_search()
     pump(window)
-    shop._category.set("Footwear (1)")
+    shop._category.set("Footwear")
     shop._load_category()
     pump(window)
     assert shop._recommended.winfo_manager() == ""      # category filter: hidden
@@ -187,7 +188,7 @@ def test_recommended_row_without_results_or_on_error(window, fake_services, monk
 
 def test_category_filter_and_search(window, fake_services):
     shop = window._screens["shop"]
-    shop._category.set("Footwear (1)")
+    shop._category.set("Footwear")
     shop._load_category()
     pump(window)
     assert [p.id for p in shop._products] == [SOCKS.id]
@@ -232,10 +233,59 @@ def test_product_page_shows_details_reviews_and_recommendations(window, fake_ser
     pump(window)
     assert window._current == "product"
     on_screen = texts(window._screens["product"]._body)
-    for expected in ("Test Fleece Hoodie", "Warm fleece.", "Add to cart",
+    for expected in ("Test Fleece Hoodie", "Warm fleece.", "BUY NOW",
                      "Frequently bought together", "Test Sports Socks", "Similar products",
                      "No similar products found.", "Very warm!"):
         assert expected in on_screen, expected
+    assert any(text.endswith("ADD TO CART") for text in on_screen)  # icon + label
+
+
+def test_header_search_shows_results_on_the_shop(window, fake_services, monkeypatch):
+    # Start from another screen (the cart, faked: no real database in GUI tests).
+    empty = CartView([], Decimal("0"), None, Decimal("0"), Decimal("0"))
+    monkeypatch.setattr(cart_screen.cart_service, "get_cart", lambda user, coupon: empty)
+    window.navigate("cart")
+    pump(window)
+    window.header.search.delete(0, "end")
+    window.header.search.insert(0, "warm socks")
+    window.header._search()          # Enter / the search icon
+    pump(window)
+    shop = window._screens["shop"]
+    assert window._current == "shop"
+    assert "1 results for \"warm socks\"" in shop._summary.cget("text")
+    shop._clear_search()
+    pump(window)
+
+
+def test_customer_has_header_links_and_no_sidebar(window):
+    assert window.sidebar.winfo_manager() == ""   # customers navigate from the header
+    assert set(window.header._link_buttons) == {"account", "orders", "cart"}
+    assert window.header._search_box.winfo_manager() == "grid"
+
+
+def test_buy_now_adds_to_cart_and_opens_the_cart(window, fake_services, monkeypatch):
+    added = []
+    monkeypatch.setattr(product_screen.cart_service, "add_to_cart",
+                        lambda user, pid, qty: added.append((pid, qty)))
+    empty = CartView([], Decimal("0"), None, Decimal("0"), Decimal("0"))
+    monkeypatch.setattr(cart_screen.cart_service, "get_cart", lambda user, coupon: empty)
+    product = window._screens["product"]
+    detail = product_screen.catalog_service.get_product_detail(1)
+    product._add_to_cart(detail, 1, ctk.CTkButton(product), then_open_cart=True)
+    pump(window)
+    pump(window)  # the cart screen loads
+    assert added == [(detail.id, 1)] and window._current == "cart"
+
+
+def test_empty_cart_shows_shop_now(window, monkeypatch):
+    empty = CartView([], Decimal("0"), None, Decimal("0"), Decimal("0"))
+    monkeypatch.setattr(cart_screen.cart_service, "get_cart", lambda user, coupon: empty)
+    window.navigate("cart")
+    pump(window)
+    screen = window._screens["cart"]
+    on_screen = texts(screen._lines)
+    assert "Your cart is empty!" in on_screen and "SHOP NOW" in on_screen
+    assert screen._checkout.cget("state") == "disabled"
 
 
 def test_add_to_cart_success_and_out_of_stock(window, fake_services, monkeypatch):
@@ -301,7 +351,7 @@ def test_orders_show_timeline_and_review_button(window, fake_services):
     pump(window)
     pump(window)  # list, then the selected order's detail
     on_screen = texts(window._screens["orders"]._detail)
-    for expected in ("Order #42", "Placed", "Shipped", "Delivered", "Write review"):
+    for expected in ("Order #42", "Placed", "Shipped", "Delivered", "RATE & REVIEW"):
         assert expected in on_screen, expected
 
 
@@ -326,6 +376,32 @@ def test_ai_model_preload_failure_is_shown(window, fake_services, monkeypatch):
     monkeypatch.setattr(app_module.system_service, "preload_search_model", lambda: False)
     login_as(window, CUSTOMER, monkeypatch)
     pump(window, until=lambda: "unavailable" in window._ai_status.cget("text"))
+
+
+def test_customer_screens_switch_to_dark_and_back(window, fake_services, monkeypatch,
+                                                 strict_theme_switch):
+    """Shop (cards, category tiles), product page, cart and orders all re-colour on a
+    light / dark switch without errors, and the choice survives logging out."""
+    from app.gui import theme
+    empty = CartView([], Decimal("0"), None, Decimal("0"), Decimal("0"))
+    monkeypatch.setattr(cart_screen.cart_service, "get_cart", lambda user, coupon: empty)
+    if window.user is not None:
+        window.logout()
+    login_as(window, CUSTOMER, monkeypatch)
+    for key, kwargs in (("shop", {}), ("product", {"product_id": HOODIE.id}),
+                        ("cart", {}), ("orders", {})):
+        window.navigate(key, **kwargs)
+        pump(window)
+        window.set_theme("dark")
+        window.update()
+        window.set_theme("light")
+        window.update()
+    window.set_theme("dark")
+    window.logout()   # screens are rebuilt for the guest: they must start dark too
+    assert theme.current_mode() == "dark"
+    assert window._screens["login"].cget("fg_color") == theme.COLORS["bg"]
+    window.set_theme("light")
+    login_as(window, CUSTOMER, monkeypatch)   # leave a customer logged in, as found
 
 
 def test_logout_returns_to_login_and_clears_screens(window):

@@ -37,9 +37,7 @@ class DateRangeBar(ctk.CTkFrame):
         presets = list(PRESET_DAYS) + ([ALL] if allow_all else [])
         self._presets = ctk.CTkSegmentedButton(
             self, values=presets, command=self._preset, font=theme.font(13),
-            selected_color=COLORS["accent"], selected_hover_color=COLORS["accent_hover"],
-            unselected_color=COLORS["surface"], unselected_hover_color=COLORS["surface_hover"],
-            text_color=COLORS["text"])
+            **theme.segmented_style())
         self._presets.pack(side="left", padx=(PAD_S + 4, 0))
         default = next((k for k, v in PRESET_DAYS.items() if v == default_days), None)
         if default:
@@ -47,7 +45,7 @@ class DateRangeBar(ctk.CTkFrame):
         self._fill(default_days)
 
     def _entry(self) -> ctk.CTkEntry:
-        entry = ctk.CTkEntry(self, width=118, height=36, corner_radius=CORNER_RADIUS,
+        entry = ctk.CTkEntry(self, width=118, height=34, corner_radius=CORNER_RADIUS, border_width=1,
                              font=theme.font(13), fg_color=COLORS["surface"],
                              border_color=COLORS["border"], text_color=COLORS["text"],
                              placeholder_text="YYYY-MM-DD")

@@ -1,4 +1,4 @@
-"""DataTable: a dark, sortable table for the admin screens.
+"""DataTable: a light, dense, sortable table for the admin screens.
 
 CustomTkinter has no table widget, so this wraps Tk's ttk.Treeview. Treeview is also
 the right tool for the job here: it draws hundreds of rows (500 orders) instantly,
@@ -14,6 +14,10 @@ Usage:
 
 Each column turns an item into display text; `sort` (optional) gives the value to sort
 by when its header is clicked (default: the display text). Click again to reverse.
+
+Light / dark mode: ttk knows nothing about CTk's appearance mode and takes single
+colour strings, so the style is built from theme.resolve(...) and rebuilt whenever the
+mode changes (_set_appearance_mode below).
 
 Column widths are PROPORTIONS: the table always fills its width exactly, sharing it
 out in the ratio of the given widths (re-done whenever the window is resized). So a
@@ -32,6 +36,7 @@ from app.gui import theme
 from app.gui.theme import COLORS
 
 STYLE = "ShopSense.Treeview"
+ROW_COLORS = ("text_muted", "danger", "warning", "success")  # allowed row_color keys
 
 
 @dataclass
@@ -44,23 +49,27 @@ class Column:
 
 
 def _configure_style(widget) -> int:
-    """Dark colours for every Treeview using STYLE. Returns the row height in pixels."""
+    """Colours for the current mode on every Treeview using STYLE (ttk styles are shared
+    by all tables, so restyling once covers them all). Returns the row height in pixels."""
+    c = {key: theme.resolve(value) for key, value in COLORS.items()}
     style = ttk.Style(widget)
     style.theme_use("clam")  # the default Windows theme ignores background colours
-    body = tkfont.Font(widget, family=theme.FONT_FAMILY, size=10)
-    head = tkfont.Font(widget, family=theme.FONT_FAMILY, size=10, weight="bold")
+    body = tkfont.Font(widget, family=theme.font_family(), size=10)
+    head = tkfont.Font(widget, family=theme.font_family(), size=9, weight="bold")
     # The row height is in real pixels while font sizes are in points, which Tk scales
     # with the screen's DPI; measuring the font keeps rows right at 100 % and 150 %.
-    row_height = body.metrics("linespace") + 12
-    style.configure(STYLE, background=COLORS["surface"], fieldbackground=COLORS["surface"],
-                    foreground=COLORS["text"], rowheight=row_height, font=body,
+    # +10 keeps rows dense, like a seller dashboard.
+    row_height = body.metrics("linespace") + 10
+    style.configure(STYLE, background=c["surface"], fieldbackground=c["surface"],
+                    foreground=c["text"], rowheight=row_height, font=body,
                     borderwidth=0, relief="flat")
-    style.map(STYLE, background=[("selected", COLORS["accent"])],
-              foreground=[("selected", "#FFFFFF")])
-    style.configure(f"{STYLE}.Heading", background=COLORS["sidebar"],
-                    foreground=COLORS["text_muted"], font=head, relief="flat",
-                    borderwidth=0, padding=(8, 8))
-    style.map(f"{STYLE}.Heading", background=[("active", COLORS["surface_hover"])])
+    # Selected row: a blue tint with blue text (a solid blue bar would be too loud).
+    style.map(STYLE, background=[("selected", c["selected_nav"])],
+              foreground=[("selected", c["accent"])])
+    style.configure(f"{STYLE}.Heading", background=c["surface_hover"],
+                    foreground=c["text_muted"], font=head, relief="flat",
+                    borderwidth=0, padding=(8, 7))
+    style.map(f"{STYLE}.Heading", background=[("active", c["border"])])
     style.layout(STYLE, [("Treeview.treearea", {"sticky": "nswe"})])  # no inner border
     return row_height
 
@@ -73,7 +82,8 @@ class DataTable(ctk.CTkFrame):
                  empty_text: str = "Nothing to show.") -> None:
         """on_select(item): a row was selected. on_open(item): double-click or Enter.
         row_color(item): a COLORS key for the row's text (e.g. "text_muted"), or None."""
-        super().__init__(parent, fg_color=COLORS["surface"], corner_radius=theme.CORNER_RADIUS)
+        super().__init__(parent, fg_color=COLORS["surface"], corner_radius=theme.CORNER_RADIUS,
+                         border_width=1, border_color=COLORS["border"])
         self._columns = columns
         self._on_select, self._on_open, self._row_color = on_select, on_open, row_color
         self._items: dict[str, Any] = {}
@@ -91,8 +101,7 @@ class DataTable(ctk.CTkFrame):
                               command=lambda i=i: self.sort_by(i))
             self.tree.column(cid, width=column.width, minwidth=30, anchor=column.anchor,
                              stretch=False)
-        for name in ("text_muted", "danger", "warning", "success"):
-            self.tree.tag_configure(name, foreground=COLORS[name])
+        self._color_tags()
 
         scrollbar = ctk.CTkScrollbar(self, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -105,6 +114,19 @@ class DataTable(ctk.CTkFrame):
         self.tree.bind("<<TreeviewSelect>>", self._selected)
         self.tree.bind("<Double-1>", self._opened)
         self.tree.bind("<Return>", self._opened)
+
+    def _color_tags(self) -> None:
+        """Row text colours (row_color keys) for the current mode."""
+        for name in ROW_COLORS:
+            self.tree.tag_configure(name, foreground=theme.resolve(COLORS[name]))
+
+    def _set_appearance_mode(self, mode_string: str) -> None:
+        """CustomTkinter calls this on every CTk widget when the light / dark mode
+        changes. The CTk parts (frame, scrollbar, label) redraw in super(); the ttk
+        Treeview inside needs its colours re-applied by hand."""
+        super()._set_appearance_mode(mode_string)
+        _configure_style(self)
+        self._color_tags()
 
     def _fit_columns(self, event) -> None:
         """Share the table's current width out between the columns (see top of file)."""

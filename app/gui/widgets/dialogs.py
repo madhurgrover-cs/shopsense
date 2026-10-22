@@ -185,12 +185,14 @@ class FormDialog(ctk.CTkToplevel):
             widget.set(spec.value or (spec.choices[0] if spec.choices else ""))
         elif spec.kind == "text":
             widget = ctk.CTkTextbox(frame, width=width, height=110, font=theme.body_font(),
-                                    fg_color=COLORS["bg"], border_color=COLORS["border"],
+                                    corner_radius=theme.CORNER_RADIUS,
+                                    fg_color=COLORS["surface"], border_color=COLORS["border"],
                                     border_width=1, text_color=COLORS["text"], wrap="word")
             widget.insert("1.0", spec.value)
         else:
-            widget = ctk.CTkEntry(frame, width=width, height=38, font=theme.body_font(),
-                                  fg_color=COLORS["bg"], border_color=COLORS["border"],
+            widget = ctk.CTkEntry(frame, width=width, height=34, font=theme.body_font(),
+                                  fg_color=COLORS["surface"], border_color=COLORS["border"],
+                                  border_width=1, corner_radius=theme.CORNER_RADIUS,
                                   text_color=COLORS["text"])
             widget.insert(0, spec.value)
             widget.bind("<Return>", lambda _e: self.submit())

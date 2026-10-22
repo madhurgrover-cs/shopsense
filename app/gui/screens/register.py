@@ -4,22 +4,20 @@ import customtkinter as ctk
 
 from app.gui import theme
 from app.gui.screens.base import Screen
-from app.gui.theme import PAD_L, PAD_M, PAD_S, PAD_XL
-from app.gui.widgets.common import card, field_label, form_entry, label, link_button, muted
+from app.gui.screens.login import two_panel
+from app.gui.theme import PAD_S
+from app.gui.widgets.common import field_label, form_entry, link_button, muted
 from app.services import auth_service
 
 
 class RegisterScreen(Screen):
     title = "Create account"
+    show_title = False  # the card has its own heading
 
     def __init__(self, parent, app) -> None:
         super().__init__(parent, app)
-        box = card(self, width=420)
-        box.place(relx=0.5, rely=0.42, anchor="center")
-
-        label(box, "Create your account", size=22, weight="bold").pack(
-            fill="x", padx=PAD_XL, pady=(PAD_XL, 2))
-        muted(box, "It takes less than a minute.").pack(fill="x", padx=PAD_XL, pady=(0, PAD_L))
+        box = two_panel(self, "Looks like you're new here!",
+                        "Sign up with your email address to get started.")
 
         self._name = form_entry(box, "e.g. Asha Rao")
         self._email = form_entry(box, "you@example.com")
@@ -29,19 +27,20 @@ class RegisterScreen(Screen):
                   ("Password (at least 8 characters)", self._password),
                   ("Confirm password", self._confirm)]
         for text, entry in fields:
-            field_label(box, text).pack(fill="x", padx=PAD_XL)
-            entry.pack(fill="x", padx=PAD_XL, pady=(2, PAD_S + 2))
+            field_label(box, text).pack(fill="x")
+            entry.configure(height=34)  # four fields: a little shorter to fit the card
+            entry.pack(fill="x", pady=(1, PAD_S))
             entry.bind("<Return>", lambda _e: self._submit())
 
-        self._button = ctk.CTkButton(box, text="Create account", command=self._submit,
-                                     width=356, **theme.primary_button_style())
-        self._button.pack(fill="x", padx=PAD_XL, pady=(PAD_S, 0))
+        self._button = ctk.CTkButton(box, text="CONTINUE", command=self._submit,
+                                     **theme.buy_button_style())
+        self._button.pack(fill="x", pady=(PAD_S, 0))
 
         footer = ctk.CTkFrame(box, fg_color="transparent")
-        footer.pack(fill="x", padx=PAD_XL, pady=(PAD_M, PAD_XL))
-        muted(footer, "Already have an account?").pack(side="left")
-        link_button(footer, "Sign in", lambda: self.app.navigate("login")).pack(
-            side="left", padx=PAD_S)
+        footer.pack(side="bottom", fill="x")
+        muted(footer, "Existing user?").pack(side="left")
+        link_button(footer, "Log in", lambda: self.app.navigate("login")).pack(
+            side="left", padx=(2, 0))
 
     def on_show(self, **kwargs) -> None:
         for entry in (self._password, self._confirm):

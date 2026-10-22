@@ -17,6 +17,8 @@ ORDER_STATUS_COLORS = {
     "delivered": COLORS["success"],
     "cancelled": COLORS["danger"],
 }
+SENTIMENT_TEXT = {"Positive": "Customers love it", "Mixed": "Mixed reviews",
+                  "Negative": "Mostly negative reviews"}
 PAYMENT_METHOD_LABELS = {"upi": "UPI", "card": "Card", "cod": "Cash on delivery",
                          "wallet": "Wallet"}
 
@@ -57,6 +59,11 @@ def rating(avg: float | None, count: int) -> str:
     if not count or avg is None:
         return "No reviews yet"
     return f"★ {avg:.1f} ({count})"
+
+
+def sentiment_text(badge: str) -> str:
+    """The small sentiment line on product tiles, e.g. "Customers love it"."""
+    return SENTIMENT_TEXT.get(badge, f"{badge} reviews")
 
 
 def stars(value: int) -> str:

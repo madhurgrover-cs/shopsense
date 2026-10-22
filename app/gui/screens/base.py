@@ -21,6 +21,7 @@ class Screen(ctk.CTkFrame):
     """
 
     title = ""
+    show_title = True   # False: the screen starts with its own heading (see app.navigate)
 
     def __init__(self, parent, app: "ShopSenseApp") -> None:
         super().__init__(parent, fg_color=COLORS["bg"], corner_radius=0)

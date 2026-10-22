@@ -5,19 +5,20 @@ from collections.abc import Callable
 import customtkinter as ctk
 
 from app.gui import theme
-from app.gui.theme import COLORS, CORNER_RADIUS, PAD_M, PAD_S, PAD_XL
+from app.gui.theme import COLORS, CORNER_RADIUS, PAD_S, PAD_XL
 
 
 def toolbar(screen) -> ctk.CTkFrame:
     """The row of controls at the top of a screen."""
     bar = ctk.CTkFrame(screen, fg_color="transparent")
-    bar.pack(fill="x", padx=PAD_XL, pady=(PAD_S, PAD_M))
+    bar.pack(fill="x", padx=PAD_XL, pady=(PAD_S, PAD_S))
     return bar
 
 
 def button(parent, text: str, command: Callable[[], None], kind: str = "secondary",
            width: int = 120) -> ctk.CTkButton:
-    """kind: "primary" (main action), "secondary", or "danger" (delete / cancel)."""
+    """kind: "primary" (the screen's one main action, blue), "secondary" (white with a
+    thin border), or "danger" (white with red text: delete / cancel)."""
     if kind == "primary":
         style = theme.primary_button_style()
     else:
@@ -32,7 +33,7 @@ def button(parent, text: str, command: Callable[[], None], kind: str = "secondar
 def dropdown(parent, values: list[str], command: Callable[[str], None],
              width: int = 180) -> ctk.CTkOptionMenu:
     return ctk.CTkOptionMenu(
-        parent, values=values, command=command, width=width, height=38,
+        parent, values=values, command=command, width=width, height=34,
         corner_radius=CORNER_RADIUS, font=theme.body_font(), fg_color=COLORS["surface"],
         button_color=COLORS["surface_hover"], button_hover_color=COLORS["border"],
         text_color=COLORS["text"], dropdown_fg_color=COLORS["surface"],
@@ -43,10 +44,10 @@ def search_box(parent, placeholder: str, on_change: Callable[[], None],
                width: int = 280) -> ctk.CTkEntry:
     """A filter box that calls on_change() on every key press (filtering happens in
     memory, on rows already loaded, so it's instant)."""
-    entry = ctk.CTkEntry(parent, placeholder_text=placeholder, width=width, height=38,
-                         corner_radius=CORNER_RADIUS, font=theme.body_font(),
+    entry = ctk.CTkEntry(parent, placeholder_text=placeholder, width=width, height=34,
+                         corner_radius=CORNER_RADIUS, font=theme.body_font(), border_width=1,
                          fg_color=COLORS["surface"], border_color=COLORS["border"],
-                         text_color=COLORS["text"])
+                         text_color=COLORS["text"], placeholder_text_color=COLORS["text_muted"])
     entry.bind("<KeyRelease>", lambda _e: on_change())
     return entry
 

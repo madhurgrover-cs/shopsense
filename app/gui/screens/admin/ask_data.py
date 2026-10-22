@@ -46,7 +46,7 @@ class AskDataScreen(Screen):
 
         bar = toolbar(self)
         self._question = ctk.CTkEntry(
-            bar, height=38, corner_radius=CORNER_RADIUS, font=theme.body_font(),
+            bar, height=34, corner_radius=CORNER_RADIUS, font=theme.body_font(), border_width=1,
             placeholder_text="Ask a question about the store, e.g. "
                              "\"What was the revenue in each of the last 6 months?\"",
             fg_color=COLORS["surface"], border_color=COLORS["border"],

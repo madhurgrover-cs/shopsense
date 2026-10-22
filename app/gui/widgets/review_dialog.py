@@ -42,7 +42,7 @@ class ReviewDialog(ctk.CTkToplevel):
 
         label(box, "Comment (optional)", size=13, weight="bold").pack(fill="x")
         self._comment = ctk.CTkTextbox(box, width=440, height=120, corner_radius=CORNER_RADIUS,
-                                       font=theme.body_font(), fg_color=COLORS["bg"],
+                                       font=theme.body_font(), fg_color=COLORS["surface"],
                                        border_color=COLORS["border"], border_width=1,
                                        text_color=COLORS["text"], wrap="word")
         self._comment.pack(fill="x", pady=(4, PAD_M))
